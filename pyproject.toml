@@ -1,0 +1,39 @@
+[project]
+name = "kasa42"
+version = "0.1.0"
+description = "A speech stack for 42 Ghanaian languages: multilingual ASR + Kusaal TTS"
+requires-python = ">=3.11,<3.13"
+
+# Phase 0 (no GPU) only needs metadata tooling. Parquet column projection lets us
+# audit all 42 languages without ever downloading the 222 GB audio column.
+dependencies = [
+    "pyarrow>=17.0.0",
+    "huggingface-hub>=0.34.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+# Installed on the H200 at H+0, not needed locally.
+train = [
+    "torch>=2.4.0",
+    "transformers>=4.44.0",
+    "datasets>=3.0.0",
+    "accelerate>=0.34.0",
+    "soundfile>=0.12.1",
+    "librosa>=0.10.2",
+    "jiwer>=3.0.4",
+]
+serve = [
+    "gradio>=4.44.0",
+    "onnxruntime>=1.19.0",
+    "onnx>=1.16.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kasa42"]

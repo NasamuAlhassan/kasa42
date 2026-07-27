@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Audio and checkpoints never go in git.
+# Leading slashes matter: a bare `data/` also matches src/kasa42/data/, which
+# would silently drop the entire data module from the repo — and you would only
+# find out after cloning on the H200.
+/data/
+/checkpoints/
+/export*/
+/third_party/
+
+# Derived, but small and worth committing so Thursday starts from frozen splits:
+#   results/manifest.parquet, splits.json, vocab.json, mixture.json, audit_all.json
+results/tts_samples/
+results/testset.jsonl
+
+.ipynb_checkpoints/
+.DS_Store

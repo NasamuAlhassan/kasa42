@@ -1,0 +1,25 @@
+[
+  {
+    "config": "Kusaal_kus",
+    "language": "Kusaal",
+    "iso": "kus",
+    "n_files": 22,
+    "n_segments": 48598,
+    "total_hours": 81.63,
+    "n_sources": 54,
+    "segments_per_source_median": 40.0,
+    "segments_per_source_max": 101,
+    "top_source_share": 0.0457,
+    "top5_source_share": 0.1793,
+    "duration_p50": 4.86,
+    "duration_p90": 11.9,
+    "duration_max": 29.32,
+    "charset_size": 75,
+    "sample_sources": [
+      "1CO.15.3752",
+      "1CO.7.3752",
+      "1CH.2.3752"
+    ],
+    "sample_text": "YIIGA YƐLKƲDA 1."
+  }
+]
