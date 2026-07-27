@@ -53,6 +53,13 @@ def parse_source(s: str) -> tuple[str, int, str]:
     return m.group(1), int(m.group(2)), m.group(3)
 
 
+# fsspec buffers file blocks in RAM. Left at its default, N concurrent readers
+# against 1.5 GB shards will exhaust a 16 GB box — this OOM'd and restarted a
+# Kaggle kernel at 16 workers. Cap the block size so memory stays bounded by
+# roughly (workers x BLOCK_SIZE) rather than by the size of the shards.
+BLOCK_SIZE = 4 * 1024 * 1024
+
+
 def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4) -> pa.Table:
     """Read one shard's metadata, retrying transient network failures.
 
@@ -64,9 +71,12 @@ def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4) -
     for attempt in range(retries):
         try:
             fs = HfFileSystem()
-            with fs.open(f"datasets/{REPO}/{path}", "rb") as fh:
+            with fs.open(f"datasets/{REPO}/{path}", "rb",
+                         block_size=BLOCK_SIZE, cache_type="readahead") as fh:
                 pf = pq.ParquetFile(fh)
                 present = [c for c in COLS if c in pf.schema_arrow.names]
+                # Read row-group at a time and keep only the metadata columns,
+                # so peak memory is one row group rather than a whole shard.
                 d = pf.read(columns=present).to_pydict()
             break
         except Exception as e:  # noqa: BLE001 - any transport error is retryable here
@@ -109,7 +119,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="results/manifest.parquet")
     ap.add_argument("--parts-dir", default="results/manifest_parts")
-    ap.add_argument("--workers", type=int, default=8, help="HTTP-bound; 8-16 is sensible.")
+    ap.add_argument("--workers", type=int, default=6,
+                    help="HTTP-bound, but each worker buffers ~4 MB blocks. "
+                         "6 is safe on a 16 GB Kaggle kernel; raise only with headroom.")
     ap.add_argument("--configs", nargs="*")
     ap.add_argument("--force", action="store_true", help="Rebuild configs already on disk.")
     ap.add_argument("--merge-only", action="store_true",
@@ -161,18 +173,31 @@ def main() -> None:
     if not have:
         print("\nNo parts to merge.")
         return
-    table = pa.concat_tables([pq.read_table(p) for p in have])
+
+    # Stream part-by-part rather than concatenating all 42 in memory first.
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(table, out, compression="zstd")
+    rows = 0
+    seconds = 0.0
+    writer: pq.ParquetWriter | None = None
+    try:
+        for p in have:
+            t = pq.read_table(p)
+            if writer is None:
+                writer = pq.ParquetWriter(out, t.schema, compression="zstd")
+            writer.write_table(t)
+            rows += t.num_rows
+            seconds += pa.compute.sum(t.column("duration")).as_py() or 0.0
+            del t
+    finally:
+        if writer is not None:
+            writer.close()
 
-    hours = pa.compute.sum(table.column("duration")).as_py() / 3600
-    n_cfg = len(set(table.column("config").to_pylist()))
     print(f"\nmerged {len(have)} parts -> {out}")
-    print(f"  {table.num_rows:,} rows  {n_cfg} configs  {hours:,.1f} h  "
+    print(f"  {rows:,} rows  {len(have)} configs  {seconds/3600:,.1f} h  "
           f"{out.stat().st_size/1e6:.1f} MB")
-    if n_cfg < 42:
-        print(f"  NOTE: only {n_cfg}/42 configs present — rerun to fetch the rest")
+    if len(have) < 42:
+        print(f"  NOTE: only {len(have)}/42 configs present — rerun to fetch the rest")
 
 
 if __name__ == "__main__":

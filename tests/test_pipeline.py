@@ -71,8 +71,13 @@ def main() -> None:
 
     print(f"  torch {torch.__version__}  transformers {transformers.__version__}")
     check("torch imports", True)
-    check("CUDA absent (expected on this box)", not torch.cuda.is_available(),
-          "GPU path is exercised on Thursday")
+    # Informational, never a failure: this script is meant to run both on a
+    # laptop with no GPU and on Kaggle with one.
+    if torch.cuda.is_available():
+        print(f"  info  CUDA present: {torch.cuda.get_device_name(0)}, "
+              f"bf16={torch.cuda.is_bf16_supported()}")
+    else:
+        print("  info  no CUDA — logic-only run, GPU path exercised on Kaggle/H200")
 
     from kasa42.asr.dataset import CharTokenizer, Collator, LengthBucketSampler, decode_audio
     from kasa42.asr.model import Kasa42ForCTC
