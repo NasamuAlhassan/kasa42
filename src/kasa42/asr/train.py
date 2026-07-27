@@ -109,8 +109,42 @@ def load_split(cfg: TrainConfig, split: str, lang_map: dict[str, int]):
     return datasets.concatenate_datasets(parts)
 
 
+def preflight(cfg: TrainConfig) -> None:
+    """Fail early, and say exactly which command is missing.
+
+    Training depends on four artefacts built by the data pipeline. A bare
+    FileNotFoundError three frames deep is a poor way to discover that at hour
+    four of a 48-hour window, so check them up front and name the fix.
+    """
+    needed = [
+        (cfg.manifest, "python -m kasa42.data.build_manifest --workers 6"),
+        (cfg.splits, "python -m kasa42.data.splits"),
+        (cfg.vocab, "python -m kasa42.data.vocab"),
+        (cfg.mixture, "python -m kasa42.data.mixture --alpha 0.5 --cap-hours 40"),
+    ]
+    missing = [(p, cmd) for p, cmd in needed if not Path(p).exists()]
+    if not missing:
+        return
+
+    lines = ["", "Cannot train — the data pipeline has not been run.", ""]
+    for p, cmd in missing:
+        lines.append(f"  missing {p}")
+        lines.append(f"     fix: {cmd}")
+    lines += [
+        "",
+        "They must run in that order; each consumes the previous one's output.",
+        "The manifest is the slow step (network-bound); the rest take seconds.",
+        "",
+        "If the manifest died partway, just rerun it — completed configs are",
+        "cached in results/manifest_parts/ and skipped.",
+        "",
+    ]
+    raise SystemExit("\n".join(lines))
+
+
 def train(cfg: TrainConfig | None = None) -> Path:
     cfg = cfg or TrainConfig()
+    preflight(cfg)
     torch.manual_seed(cfg.seed)
 
     from transformers import SeamlessM4TFeatureExtractor
