@@ -1,0 +1,11 @@
+# Authored on Windows, run on Linux (Kaggle, and the H200 notebook).
+# Force LF in the repo so shell lines inside notebooks and any scripts do not
+# arrive with stray carriage returns.
+* text=auto eol=lf
+
+*.png binary
+*.wav binary
+*.parquet binary
+*.onnx binary
+*.safetensors binary
+*.pt binary
