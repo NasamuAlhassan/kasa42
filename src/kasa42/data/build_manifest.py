@@ -4,9 +4,14 @@ One pass over every parquet shard reading only the non-audio columns, producing
 a single ~150 MB table for 1.4 M segments. Everything downstream — splits,
 mixture weights, vocab — operates on this instead of touching audio.
 
-Doing this locally before the GPU window means the splits are frozen and
-reproducible on Thursday rather than being derived under time pressure. It is
-HTTP-bound, so it runs threaded and is safe to leave in the background.
+**Resumable by design.** The first version of this script held everything in
+memory and wrote once at the end; a DNS blip at shard 411 of 533 destroyed two
+hours of work. Now each config is written to `results/manifest_parts/` as soon
+as it completes, and a rerun skips whatever is already on disk. A network drop
+costs one config, not the run.
+
+Shards are also retried individually, because transient 5xx and DNS failures are
+normal over a run this long.
 """
 
 from __future__ import annotations
@@ -48,11 +53,29 @@ def parse_source(s: str) -> tuple[str, int, str]:
     return m.group(1), int(m.group(2)), m.group(3)
 
 
-def read_shard(fs: HfFileSystem, config: str, iso: str, path: str, shard: int) -> pa.Table:
-    with fs.open(f"datasets/{REPO}/{path}", "rb") as fh:
-        pf = pq.ParquetFile(fh)
-        present = [c for c in COLS if c in pf.schema_arrow.names]
-        d = pf.read(columns=present).to_pydict()
+def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4) -> pa.Table:
+    """Read one shard's metadata, retrying transient network failures.
+
+    A fresh HfFileSystem per attempt matters: once an httpx client has been
+    closed by a DNS failure it stays closed, and every later call through it
+    fails with 'Cannot send a request, as the client has been closed'.
+    """
+    last: Exception | None = None
+    for attempt in range(retries):
+        try:
+            fs = HfFileSystem()
+            with fs.open(f"datasets/{REPO}/{path}", "rb") as fh:
+                pf = pq.ParquetFile(fh)
+                present = [c for c in COLS if c in pf.schema_arrow.names]
+                d = pf.read(columns=present).to_pydict()
+            break
+        except Exception as e:  # noqa: BLE001 - any transport error is retryable here
+            last = e
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+    else:  # pragma: no cover
+        raise last  # type: ignore[misc]
 
     n = len(d.get("id") or d.get("text") or [])
     src = [str(x) for x in d.get("source_file", [""] * n)]
@@ -72,58 +95,84 @@ def read_shard(fs: HfFileSystem, config: str, iso: str, path: str, shard: int) -
     }, schema=SCHEMA)
 
 
+def build_config(config: str, iso: str, files: list[str], workers: int) -> pa.Table:
+    tables: list[pa.Table] = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(read_shard, config, iso, p, i): p
+                for i, p in enumerate(files)}
+        for fut in as_completed(futs):
+            tables.append(fut.result())  # a failed shard aborts this config only
+    return pa.concat_tables(tables)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="results/manifest.parquet")
+    ap.add_argument("--parts-dir", default="results/manifest_parts")
     ap.add_argument("--workers", type=int, default=8, help="HTTP-bound; 8-16 is sensible.")
     ap.add_argument("--configs", nargs="*")
+    ap.add_argument("--force", action="store_true", help="Rebuild configs already on disk.")
+    ap.add_argument("--merge-only", action="store_true",
+                    help="Skip fetching; just merge whatever parts exist.")
     args = ap.parse_args()
 
-    api, fs = HfApi(), HfFileSystem()
-    jobs: list[tuple[str, str, str, int]] = []
-    seen: dict[str, int] = {}
+    parts = Path(args.parts_dir)
+    parts.mkdir(parents=True, exist_ok=True)
+
+    api = HfApi()
+    by_config: dict[str, list[str]] = {}
     for f in sorted(api.list_repo_files(REPO, repo_type="dataset")):
-        if not f.endswith(".parquet") or "/" not in f:
-            continue
-        config = f.split("/")[0]
-        if args.configs and config not in args.configs:
-            continue
-        m = re.match(r"^(.*)_([a-z]{3})$", config)
-        iso = m.group(2) if m else ""
-        idx = seen.get(config, 0)
-        seen[config] = idx + 1
-        jobs.append((config, iso, f, idx))
+        if f.endswith(".parquet") and "/" in f:
+            by_config.setdefault(f.split("/")[0], []).append(f)
+    if args.configs:
+        by_config = {k: v for k, v in by_config.items() if k in args.configs}
 
-    print(f"Reading metadata from {len(jobs)} shards across {len(seen)} configs "
-          f"({args.workers} workers)\n")
+    if not args.merge_only:
+        todo = [c for c in sorted(by_config)
+                if args.force or not (parts / f"{c}.parquet").exists()]
+        done_already = len(by_config) - len(todo)
+        print(f"{len(by_config)} configs; {done_already} already on disk, {len(todo)} to fetch\n")
 
-    tables: list[pa.Table] = []
-    done = 0
-    t0 = time.time()
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(read_shard, fs, c, i, p, s): (c, p) for c, i, p, s in jobs}
-        for fut in as_completed(futs):
-            config, path = futs[fut]
-            done += 1
+        t0 = time.time()
+        failed: list[str] = []
+        for i, config in enumerate(todo, 1):
+            m = re.match(r"^(.*)_([a-z]{3})$", config)
+            iso = m.group(2) if m else ""
+            files = by_config[config]
             try:
-                tables.append(fut.result())
+                table = build_config(config, iso, files, args.workers)
+                pq.write_table(table, parts / f"{config}.parquet", compression="zstd")
+                hrs = pa.compute.sum(table.column("duration")).as_py() / 3600
+                el = time.time() - t0
+                eta = (len(todo) - i) * el / max(i, 1)
+                print(f"[{i:>2}/{len(todo)}] {config:24s} {table.num_rows:>7,} rows "
+                      f"{hrs:>7.1f} h  ({len(files)} shards)  ETA {eta/60:.0f} min")
             except Exception as e:
-                print(f"  [{done}/{len(jobs)}] FAILED {path}: {type(e).__name__}: {e}")
-                continue
-            if done % 25 == 0 or done == len(jobs):
-                rate = done / max(time.time() - t0, 1e-9)
-                eta = (len(jobs) - done) / max(rate, 1e-9)
-                print(f"  [{done:>3}/{len(jobs)}] {rate:.1f} shard/s  ETA {eta/60:.1f} min")
+                failed.append(config)
+                print(f"[{i:>2}/{len(todo)}] {config:24s} FAILED: {type(e).__name__}: {e}")
+                print("            rerun this script to retry it; finished configs are kept")
 
-    table = pa.concat_tables(tables)
+        if failed:
+            print(f"\n{len(failed)} config(s) failed: {', '.join(failed)}")
+            print("Rerun the same command — completed configs are skipped.")
+
+    # ------------------------------------------------------------------ merge
+    have = sorted(parts.glob("*.parquet"))
+    if not have:
+        print("\nNo parts to merge.")
+        return
+    table = pa.concat_tables([pq.read_table(p) for p in have])
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, out, compression="zstd")
 
-    size_mb = out.stat().st_size / 1e6
     hours = pa.compute.sum(table.column("duration")).as_py() / 3600
-    print(f"\nWrote {out}  {table.num_rows:,} rows  {hours:,.1f} h  {size_mb:.1f} MB "
-          f"in {(time.time()-t0)/60:.1f} min")
+    n_cfg = len(set(table.column("config").to_pylist()))
+    print(f"\nmerged {len(have)} parts -> {out}")
+    print(f"  {table.num_rows:,} rows  {n_cfg} configs  {hours:,.1f} h  "
+          f"{out.stat().st_size/1e6:.1f} MB")
+    if n_cfg < 42:
+        print(f"  NOTE: only {n_cfg}/42 configs present — rerun to fetch the rest")
 
 
 if __name__ == "__main__":
