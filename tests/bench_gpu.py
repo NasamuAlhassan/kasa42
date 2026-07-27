@@ -82,12 +82,22 @@ def main() -> None:
     name = torch.cuda.get_device_name(0)
     vram = torch.cuda.get_device_properties(0).total_memory / 1e9
     klass, tflops = gpu_class(name)
-    bf16 = torch.cuda.is_bf16_supported()
-    amp_dtype = torch.bfloat16 if bf16 else torch.float16
 
-    print(f"GPU        : {name}  ({vram:.0f} GB, class={klass}, ~{tflops} TFLOPS bf16)")
-    print(f"bf16       : {bf16}  -> amp dtype {str(amp_dtype).split('.')[-1]}")
+    from kasa42.asr.train import has_native_bf16
+
+    native = has_native_bf16()
+    cc = torch.cuda.get_device_capability()
+    amp_dtype = torch.bfloat16 if native else torch.float16
+
+    print(f"GPU        : {name}  ({vram:.0f} GB, sm_{cc[0]}{cc[1]}, "
+          f"class={klass}, ~{tflops} TFLOPS)")
+    print(f"bf16       : native={native}  "
+          f"(torch.cuda.is_bf16_supported()={torch.cuda.is_bf16_supported()}, "
+          f"which counts emulation)")
+    print(f"amp dtype  : {str(amp_dtype).split('.')[-1]}")
     print(f"torch      : {torch.__version__}\n")
+    if not native:
+        print("Pre-Ampere: bf16 would be emulated in software, so fp16 is used.\n")
 
     from transformers import SeamlessM4TFeatureExtractor
 
@@ -121,7 +131,17 @@ def main() -> None:
     scaler = torch.amp.GradScaler("cuda", enabled=(amp_dtype is torch.float16))
 
     params = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"model      : {params:.0f}M params, vocab {len(vocab)}\n")
+    # AdamW keeps fp32 weights, grads, and two moments: 16 bytes per parameter.
+    # Worth stating, because it is usually the reason a batch will not fit and
+    # it is invisible in a bare OOM message.
+    fixed_gb = params * 1e6 * 16 / 1e9
+    print(f"model      : {params:.0f}M params, vocab {len(vocab)}")
+    print(f"optimiser  : ~{fixed_gb:.1f} GB fixed (weights+grads+AdamW moments) "
+          f"of {vram:.0f} GB")
+    print(f"activations have ~{max(vram - fixed_gb, 0):.1f} GB to work with\n")
+    if cfg_ckpt := (fixed_gb > vram * 0.5):
+        print("Over half of VRAM is optimiser state. On a card this size use")
+        print("gradient_checkpointing=True and/or optim_8bit=True.\n")
 
     fe = SeamlessM4TFeatureExtractor.from_pretrained(DONDO)
     collate = Collator(fe, tok, {"Kusaal_kus": 0})

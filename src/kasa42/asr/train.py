@@ -54,6 +54,12 @@ class TrainConfig:
     max_grad_norm: float = 5.0
     lid_weight: float = 0.1
     weight_decay: float = 0.01
+    # Trades ~30% speed for a large activation-memory saving. Unnecessary on the
+    # H200's 141 GB; required on a 16 GB card, where AdamW alone costs ~9.7 GB
+    # (606M params x 16 bytes for weights + grads + two moments).
+    gradient_checkpointing: bool = False
+    # 8-bit Adam cuts optimiser state from ~4.8 GB to ~1.2 GB. Needs bitsandbytes.
+    optim_8bit: bool = False
 
     log_every: int = 25
     eval_every: int = 1000
@@ -61,6 +67,21 @@ class TrainConfig:
     seed: int = 20260730
     smoke: bool = False
     languages: list[str] = field(default_factory=list)
+
+
+def has_native_bf16() -> bool:
+    """True only where bf16 runs in hardware, i.e. Ampere (sm_80) and later.
+
+    `torch.cuda.is_bf16_supported()` is not this check. It defaults to
+    `including_emulation=True`, so a Turing T4 (sm_75) answers True and then
+    runs bf16 in software — which measured 4.0 audio-seconds/second here, an
+    order of magnitude off what fp16 gives on the same card. The H200 is
+    Hopper (sm_90) and takes the real path.
+    """
+    if not torch.cuda.is_available():
+        return False
+    major, _ = torch.cuda.get_device_capability()
+    return major >= 8
 
 
 def build_lang_map(mixture: dict) -> dict[str, int]:
@@ -185,18 +206,28 @@ def train(cfg: TrainConfig | None = None) -> Path:
         moved = model.extend_ctc_head(load_dondo_vocab(), tokenizer.vocab, cfg.encoder)
         print(f"transferred {moved} CTC head rows from DONDO; "
               f"{len(tokenizer) - moved} rows freshly initialised")
+    if cfg.gradient_checkpointing:
+        model.encoder.gradient_checkpointing_enable()
+        print("gradient checkpointing on (~30% slower, much less activation memory)")
     model = model.to(device)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    if cfg.optim_8bit:
+        import bitsandbytes as bnb
+
+        opt = bnb.optim.AdamW8bit(model.parameters(), lr=cfg.lr,
+                                  weight_decay=cfg.weight_decay)
+        print("8-bit AdamW")
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
+                                weight_decay=cfg.weight_decay)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: cosine_lr(s, cfg))
 
-    # bf16 needs Ampere or newer. The H200 has it; Kaggle's T4 and P100 do not,
-    # so a GPU smoke test on free tier must fall back to fp16 + GradScaler.
-    # Detect rather than assume, or the rehearsal fails for the wrong reason.
     amp_dtype = None
     if device == "cuda":
-        amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        print(f"gpu={torch.cuda.get_device_name(0)}  amp={str(amp_dtype).split('.')[-1]}")
+        amp_dtype = torch.bfloat16 if has_native_bf16() else torch.float16
+        cc = torch.cuda.get_device_capability()
+        print(f"gpu={torch.cuda.get_device_name(0)}  sm_{cc[0]}{cc[1]}  "
+              f"amp={str(amp_dtype).split('.')[-1]}")
     scaler = torch.amp.GradScaler("cuda", enabled=(amp_dtype is torch.float16))
 
     def autocast_ctx():
