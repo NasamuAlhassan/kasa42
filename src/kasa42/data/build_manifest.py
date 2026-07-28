@@ -17,6 +17,7 @@ normal over a run this long.
 from __future__ import annotations
 
 import argparse
+import gc
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -75,9 +76,16 @@ def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4) -
                          block_size=BLOCK_SIZE, cache_type="readahead") as fh:
                 pf = pq.ParquetFile(fh)
                 present = [c for c in COLS if c in pf.schema_arrow.names]
-                # Read row-group at a time and keep only the metadata columns,
-                # so peak memory is one row group rather than a whole shard.
-                d = pf.read(columns=present).to_pydict()
+                # Stream in batches rather than pf.read(), which materialises
+                # every row group at once. Peak memory becomes one batch of
+                # small metadata columns instead of a whole shard's worth —
+                # this is what was exhausting RAM and restarting kernels.
+                d = {c: [] for c in present}
+                for rb in pf.iter_batches(batch_size=2048, columns=present):
+                    chunk = rb.to_pydict()
+                    for c in present:
+                        d[c].extend(chunk[c])
+                    del rb, chunk
             break
         except Exception as e:  # noqa: BLE001 - any transport error is retryable here
             last = e
@@ -112,7 +120,10 @@ def build_config(config: str, iso: str, files: list[str], workers: int) -> pa.Ta
                 for i, p in enumerate(files)}
         for fut in as_completed(futs):
             tables.append(fut.result())  # a failed shard aborts this config only
-    return pa.concat_tables(tables)
+    out = pa.concat_tables(tables)
+    tables.clear()
+    gc.collect()
+    return out
 
 
 def main() -> None:
