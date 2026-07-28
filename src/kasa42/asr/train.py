@@ -96,7 +96,18 @@ def cosine_lr(step: int, cfg: TrainConfig) -> float:
 
 
 def load_split(cfg: TrainConfig, split: str, lang_map: dict[str, int]):
-    """Load segments for a split from local parquet, honouring the mixture."""
+    """Load segments for a split from local parquet, honouring the mixture.
+
+    Selection is done on *indices*, never with `Dataset.filter`. Filtering runs
+    the predicate over full rows — audio bytes included — and with `num_proc>1`
+    each worker process materialises its own copy. On a 606M-row-of-audio
+    dataset that exhausts RAM and restarts the kernel, which is precisely what
+    it did on both Kaggle and Colab.
+
+    Reading the two small columns we actually need, computing indices in plain
+    Python, and calling `select()` keeps everything memory-mapped: no audio is
+    touched until the DataLoader asks for a batch.
+    """
     import datasets
 
     mixture = json.loads(Path(cfg.mixture).read_text(encoding="utf-8"))
@@ -112,21 +123,26 @@ def load_split(cfg: TrainConfig, split: str, lang_map: dict[str, int]):
             "parquet", data_files=[str(p) for p in files], split="train",
         )
         book_split = splits.get(config, {}).get("book_to_split", {})
+
         if split == "train":
             keep = set(mixture["segment_ids"].get(config, []))
-            ds = ds.filter(lambda r, k=keep: r["id"] in k, num_proc=4)
+            # Column access on a memory-mapped dataset reads that column only.
+            idx = [i for i, sid in enumerate(ds["id"]) if sid in keep]
         else:
-            ds = ds.filter(
-                lambda r, bs=book_split, s=split: bs.get(
-                    str(r["source_file"]).split(".")[0], "train") == s,
-                num_proc=4,
-            )
-        if len(ds):
-            ds = ds.add_column("config", [config] * len(ds))
-            parts.append(ds)
+            idx = [i for i, src in enumerate(ds["source_file"])
+                   if book_split.get(str(src).split(".")[0], "train") == split]
+
+        if not idx:
+            continue
+        ds = ds.select(idx)  # lazy: an index remapping, not a copy
+        ds = ds.add_column("config", [config] * len(ds))
+        parts.append(ds)
+        print(f"  {config:24s} {len(ds):>7,} segments ({split})")
 
     if not parts:
-        raise RuntimeError(f"no data for split={split}; check --data-dir {cfg.data_dir}")
+        raise RuntimeError(
+            f"no data for split={split}. Checked {cfg.data_dir} for "
+            f"{len(configs)} configs — has the audio been downloaded?")
     return datasets.concatenate_datasets(parts)
 
 
