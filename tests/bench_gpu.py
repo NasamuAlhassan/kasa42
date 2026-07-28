@@ -207,6 +207,7 @@ def main() -> None:
 
     best = max(ok.values(), key=lambda v: v["audio_sec_per_sec"])
     rate = best["audio_sec_per_sec"]
+    clips = best["clips"]
     here_h = args.target_hours * 3600 * args.epochs / rate / 3600
 
     _, h200_tflops = gpu_class("H200")
@@ -214,20 +215,37 @@ def main() -> None:
     h200_h = here_h / scale
 
     print(f"\n{'='*62}")
-    print(f"best throughput here : {rate:.0f} s audio / s wall")
-    print(f"{args.target_hours:.0f} h x {args.epochs:g} epochs on THIS gpu : {here_h:.1f} h")
-    print(f"crude H200 estimate  : {h200_h:.1f} h  (x{scale:.0f} scale factor)")
-    print("\nThe scale factor is a ballpark from peak TFLOPS. Memory headroom on")
-    print("the H200 (141 GB vs this GPU's {:.0f} GB) also allows much larger".format(vram))
-    print("batches, so the real figure should beat this estimate.")
+    print(f"best throughput here : {rate:.1f} s audio / s wall  "
+          f"(batch of {clips} clips)")
+    print(f"{args.target_hours:.0f} h x {args.epochs:g} epochs here : {here_h:.0f} h")
+    print(f"H200 estimate        : {h200_h:.1f} h   (x{scale:.0f} on peak TFLOPS)")
+
+    # A tiny batch leaves the GPU mostly idle between kernel launches, so a
+    # TFLOPS-only scaling understates a card that can hold a far larger batch.
+    # Do not quantify the gain — just say which way the error points.
+    if clips <= 8:
+        print(f"\nThis is PESSIMISTIC. Only {clips} clips fit per batch on {vram:.0f} GB, so")
+        print(f"the GPU is largely idle. The H200's 141 GB holds a far larger batch,")
+        print(f"and throughput improves substantially with batch size until the")
+        print(f"kernels become compute-bound. Treat {h200_h:.0f} h as an upper bound.")
+
+    print(f"\n{'-'*62}")
     if h200_h > 12:
-        print("\n>12 h estimated: cut --budget-hours in mixture.py or drop an epoch.")
+        # Solve for the settings that land inside a comfortable window.
+        for ep in (3, 2):
+            budget = 10.0 * scale * rate * 3600 / (ep * 3600)
+            if budget >= 200:
+                print(f"To target ~10 h: --budget-hours {budget:.0f} with {ep} epochs")
+        print("\nSet these in data/mixture.py. Lower budget-hours mainly trims the")
+        print("largest languages, which temperature sampling was already capping —")
+        print("the tail languages keep their data either way.")
     else:
-        print("\nComfortably inside the window.")
+        print("Comfortably inside the window.")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps({
-        "gpu": name, "vram_gb": round(vram, 1), "bf16": bf16,
+        "gpu": name, "vram_gb": round(vram, 1), "bf16_native": native,
+        "compute_capability": f"sm_{cc[0]}{cc[1]}",
         "amp": str(amp_dtype), "params_m": round(params), "vocab": len(vocab),
         "by_batch_duration": results,
         "estimate": {"target_hours": args.target_hours, "epochs": args.epochs,
