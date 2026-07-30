@@ -61,39 +61,56 @@ def parse_source(s: str) -> tuple[str, int, str]:
 BLOCK_SIZE = 4 * 1024 * 1024
 
 
-def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4) -> pa.Table:
-    """Read one shard's metadata, retrying transient network failures.
+def _scan(pf: pq.ParquetFile) -> dict[str, list]:
+    """Pull the metadata columns out of an open parquet file.
 
-    A fresh HfFileSystem per attempt matters: once an httpx client has been
-    closed by a DNS failure it stays closed, and every later call through it
-    fails with 'Cannot send a request, as the client has been closed'.
+    Stream in batches rather than pf.read(), which materialises every row group
+    at once. Peak memory becomes one batch of small metadata columns instead of
+    a whole shard's worth — this is what was exhausting RAM and restarting
+    kernels.
     """
-    last: Exception | None = None
-    for attempt in range(retries):
-        try:
-            fs = HfFileSystem()
-            with fs.open(f"datasets/{REPO}/{path}", "rb",
-                         block_size=BLOCK_SIZE, cache_type="readahead") as fh:
-                pf = pq.ParquetFile(fh)
-                present = [c for c in COLS if c in pf.schema_arrow.names]
-                # Stream in batches rather than pf.read(), which materialises
-                # every row group at once. Peak memory becomes one batch of
-                # small metadata columns instead of a whole shard's worth —
-                # this is what was exhausting RAM and restarting kernels.
-                d = {c: [] for c in present}
-                for rb in pf.iter_batches(batch_size=2048, columns=present):
-                    chunk = rb.to_pydict()
-                    for c in present:
-                        d[c].extend(chunk[c])
-                    del rb, chunk
-            break
-        except Exception as e:  # noqa: BLE001 - any transport error is retryable here
-            last = e
-            if attempt == retries - 1:
-                raise
-            time.sleep(2 ** attempt)
-    else:  # pragma: no cover
-        raise last  # type: ignore[misc]
+    present = [c for c in COLS if c in pf.schema_arrow.names]
+    d: dict[str, list] = {c: [] for c in present}
+    for rb in pf.iter_batches(batch_size=2048, columns=present):
+        chunk = rb.to_pydict()
+        for c in present:
+            d[c].extend(chunk[c])
+        del rb, chunk
+    return d
+
+
+def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4,
+               local: bool = False) -> pa.Table:
+    """Read one shard's metadata.
+
+    `local=True` reads `path` straight off the filesystem — the case when the
+    host has the dataset pre-staged (the H200 box mounts it at
+    /data/ghana-speech). No transport, so no retry loop: a failure there is a
+    real error and should surface immediately rather than being slept over.
+
+    Otherwise stream it out of the Hub. A fresh HfFileSystem per attempt
+    matters: once an httpx client has been closed by a DNS failure it stays
+    closed, and every later call through it fails with 'Cannot send a request,
+    as the client has been closed'.
+    """
+    if local:
+        d = _scan(pq.ParquetFile(path))
+    else:
+        last: Exception | None = None
+        for attempt in range(retries):
+            try:
+                fs = HfFileSystem()
+                with fs.open(f"datasets/{REPO}/{path}", "rb",
+                             block_size=BLOCK_SIZE, cache_type="readahead") as fh:
+                    d = _scan(pq.ParquetFile(fh))
+                break
+            except Exception as e:  # noqa: BLE001 - any transport error is retryable here
+                last = e
+                if attempt == retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
+        else:  # pragma: no cover
+            raise last  # type: ignore[misc]
 
     n = len(d.get("id") or d.get("text") or [])
     src = [str(x) for x in d.get("source_file", [""] * n)]
@@ -113,10 +130,11 @@ def read_shard(config: str, iso: str, path: str, shard: int, retries: int = 4) -
     }, schema=SCHEMA)
 
 
-def build_config(config: str, iso: str, files: list[str], workers: int) -> pa.Table:
+def build_config(config: str, iso: str, files: list[str], workers: int,
+                 local: bool = False) -> pa.Table:
     tables: list[pa.Table] = []
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(read_shard, config, iso, p, i): p
+        futs = {ex.submit(read_shard, config, iso, p, shard=i, local=local): p
                 for i, p in enumerate(files)}
         for fut in as_completed(futs):
             tables.append(fut.result())  # a failed shard aborts this config only
@@ -134,6 +152,10 @@ def main() -> None:
                     help="HTTP-bound, but each worker buffers ~4 MB blocks. "
                          "6 is safe on a 16 GB Kaggle kernel; raise only with headroom.")
     ap.add_argument("--configs", nargs="*")
+    ap.add_argument("--local-root",
+                    help="Read pre-staged shards from <root>/<config>/*.parquet "
+                         "instead of the Hub (the H200 box has the dataset at "
+                         "/data/ghana-speech). Disk-bound, so it takes minutes.")
     ap.add_argument("--force", action="store_true", help="Rebuild configs already on disk.")
     ap.add_argument("--merge-only", action="store_true",
                     help="Skip fetching; just merge whatever parts exist.")
@@ -142,11 +164,30 @@ def main() -> None:
     parts = Path(args.parts_dir)
     parts.mkdir(parents=True, exist_ok=True)
 
-    api = HfApi()
     by_config: dict[str, list[str]] = {}
-    for f in sorted(api.list_repo_files(REPO, repo_type="dataset")):
-        if f.endswith(".parquet") and "/" in f:
-            by_config.setdefault(f.split("/")[0], []).append(f)
+    if args.local_root:
+        root = Path(args.local_root)
+        if not root.is_dir():
+            raise SystemExit(f"--local-root {root} is not a directory")
+        # One level of config directories, each holding the shards. Anything
+        # without parquet in it is not a config — skip quietly rather than
+        # emitting an empty part file for it.
+        for d in sorted(p for p in root.iterdir() if p.is_dir()):
+            shards = sorted(str(p) for p in d.glob("*.parquet"))
+            if shards:
+                by_config[d.name] = shards
+        if not by_config:
+            raise SystemExit(
+                f"no <config>/*.parquet under {root} — check the layout with "
+                f"`ls {root}` and point --local-root at the level above the "
+                f"config directories")
+        print(f"local root {root}: {len(by_config)} configs, "
+              f"{sum(len(v) for v in by_config.values())} shards")
+    else:
+        api = HfApi()
+        for f in sorted(api.list_repo_files(REPO, repo_type="dataset")):
+            if f.endswith(".parquet") and "/" in f:
+                by_config.setdefault(f.split("/")[0], []).append(f)
     if args.configs:
         by_config = {k: v for k, v in by_config.items() if k in args.configs}
 
@@ -163,7 +204,8 @@ def main() -> None:
             iso = m.group(2) if m else ""
             files = by_config[config]
             try:
-                table = build_config(config, iso, files, args.workers)
+                table = build_config(config, iso, files, args.workers,
+                                     local=bool(args.local_root))
                 pq.write_table(table, parts / f"{config}.parquet", compression="zstd")
                 hrs = pa.compute.sum(table.column("duration")).as_py() / 3600
                 el = time.time() - t0

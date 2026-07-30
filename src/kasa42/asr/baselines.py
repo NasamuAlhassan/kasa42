@@ -146,17 +146,37 @@ def run_whisper(records, device: str, batch_size: int = 8):
     return out
 
 
+def load_records(path: str) -> list[dict]:
+    """Read the test set as parquet, or as JSONL if that is what it is.
+
+    Parquet is what `kasa42.asr.testset` writes, and the only sane container
+    here: audio is raw bytes, which JSON can only carry base64-encoded, at about
+    a third more bytes for nothing.
+    """
+    if path.endswith(".parquet"):
+        import pyarrow.parquet as pq
+
+        return pq.read_table(path).to_pylist()
+    return [json.loads(l) for l in
+            Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--test-set", default="results/testset.jsonl",
-                    help="Records with config/text/audio, produced from the book-disjoint split.")
+    ap.add_argument("--test-set", default="results/testset_honest.parquet",
+                    help="Records with config/text/audio, produced from the "
+                         "book-disjoint split by `python -m kasa42.asr.testset`.")
     ap.add_argument("--which", nargs="*", default=["dondo", "mms", "whisper"])
     ap.add_argument("--out-dir", default="results/baselines")
     ap.add_argument("--batch-size", type=int, default=8)
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    records = [json.loads(l) for l in Path(args.test_set).read_text(encoding="utf-8").splitlines() if l.strip()]
+    if not Path(args.test_set).exists():
+        raise SystemExit(
+            f"no {args.test_set}\n"
+            f"   fix: python -m kasa42.asr.testset --data-dir /data/ghana-speech")
+    records = load_records(args.test_set)
     print(f"{len(records):,} test utterances on {device}\n")
 
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
