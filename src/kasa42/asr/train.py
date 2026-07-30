@@ -76,6 +76,11 @@ class TrainConfig:
     # "auto" picks the highest stepN.pt in out_dir; or give a path. Empty means
     # start from the encoder.
     resume: str = ""
+    # Consecutive OOM batches tolerated before giving up. The card is shared,
+    # and the other tenant's footprint moves by tens of GB without warning, so
+    # one unlucky batch should not end a multi-hour run. A sustained run of
+    # them means the room is genuinely gone and retrying only wastes the window.
+    oom_patience: int = 8
 
 
 def has_native_bf16() -> bool:
@@ -308,7 +313,12 @@ def train(cfg: TrainConfig | None = None) -> Path:
         print(f"transferred {moved} CTC head rows from DONDO; "
               f"{len(tokenizer) - moved} rows freshly initialised")
     if cfg.gradient_checkpointing:
-        model.encoder.gradient_checkpointing_enable()
+        # use_reentrant=False is the non-optional part. The reentrant
+        # implementation needs at least one input with requires_grad, and the
+        # encoder is frozen for the first freeze_encoder_steps — so the default
+        # either errors or silently drops gradients exactly during warmup.
+        model.encoder.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
         print("gradient checkpointing on (~30% slower, much less activation memory)")
     model = model.to(device)
 
@@ -355,6 +365,7 @@ def train(cfg: TrainConfig | None = None) -> Path:
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     step, t0, frozen = start_step, time.time(), False
+    skipped = oom_run = 0
     model.train()
     while step < cfg.max_steps:
         sampler.set_epoch(step)
@@ -367,11 +378,38 @@ def train(cfg: TrainConfig | None = None) -> Path:
                 model.set_encoder_frozen(want_frozen)
                 frozen = want_frozen
 
-            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-            with autocast_ctx():
-                res = model(**batch)
-            loss = res["loss"] / cfg.grad_accum
-            scaler.scale(loss).backward()
+            try:
+                batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+                with autocast_ctx():
+                    res = model(**batch)
+                loss = res["loss"] / cfg.grad_accum
+                scaler.scale(loss).backward()
+            except torch.OutOfMemoryError:
+                # Not our footprint that moved — the neighbour's. Drop this
+                # batch, keep the run. Gradients from the partial backward are
+                # discarded rather than applied to a half-finished step.
+                skipped += 1
+                oom_run += 1
+                opt.zero_grad(set_to_none=True)
+                batch = res = loss = None
+                torch.cuda.empty_cache()
+                if oom_run >= cfg.oom_patience:
+                    # Full checkpoint, not a bare state_dict: this filename is
+                    # not stepN.pt, so the step has to travel inside the file
+                    # for --resume to know where it is.
+                    torch.save({"model": model.state_dict(),
+                                "optimizer": opt.state_dict(),
+                                "scaler": scaler.state_dict(),
+                                "step": step}, out / f"oom{step}.pt")
+                    raise SystemExit(
+                        f"\n{oom_run} OOM batches in a row at step {step:,} — the "
+                        f"GPU is genuinely full, not spiking.\n"
+                        f"Weights saved to {out / f'oom{step}.pt'}.\n"
+                        f"Check `nvidia-smi` for the other tenant, then resume with\n"
+                        f"  --resume {out / f'oom{step}.pt'} --batch-duration "
+                        f"{cfg.batch_duration / 2:.0f} --max-steps {cfg.max_steps * 2}")
+                continue
+            oom_run = 0
 
             if (step + 1) % cfg.grad_accum == 0:
                 scaler.unscale_(opt)
@@ -390,7 +428,8 @@ def train(cfg: TrainConfig | None = None) -> Path:
                       f"ctc {res['ctc_loss'].item():.3f}  "
                       f"lid {res.get('lid_loss', torch.tensor(0.)).item():.3f}  "
                       f"lr {sched.get_last_lr()[0]:.2e}  "
-                      f"{done/max(el,1e-9):.2f} step/s  {el/60:.1f} min")
+                      f"{done/max(el,1e-9):.2f} step/s  {el/60:.1f} min"
+                      + (f"  oom-skipped {skipped}" if skipped else ""))
 
             if step and step % cfg.save_every == 0:
                 # Full checkpoint, so a resume from here keeps AdamW's moments.
@@ -404,6 +443,9 @@ def train(cfg: TrainConfig | None = None) -> Path:
     # load it directly, and it is the artefact that gets published.
     torch.save(model.state_dict(), out / "final.pt")
     print(f"\nsaved {out/'final.pt'} after {(time.time()-t0)/60:.1f} min")
+    if skipped:
+        print(f"{skipped} batch(es) skipped on OOM — the card is shared, and the "
+              f"other tenant's footprint moved during the run.")
     return out / "final.pt"
 
 
@@ -412,11 +454,23 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(description=__doc__)
     for f in TrainConfig.__dataclass_fields__.values():
-        if f.type is bool or f.name == "smoke":
-            ap.add_argument(f"--{f.name.replace('_','-')}", action="store_true")
+        flag = f"--{f.name.replace('_', '-')}"
+        # Test the default, not the annotation. `from __future__ import
+        # annotations` makes f.type the *string* "bool", so `f.type is bool`
+        # never matched and every boolean silently became a value-taking
+        # option: --gradient-checkpointing demanded an argument it should not
+        # have, and --transfer-head False parsed as bool("False") == True.
+        if isinstance(f.default, bool):
+            if f.default:
+                # Defaults on, so the useful flag is the one that turns it off.
+                # A store_true here would flip the default to False and quietly
+                # disable the DONDO head transfer.
+                ap.add_argument(f"--no-{f.name.replace('_', '-')}", dest=f.name,
+                                action="store_false", default=True)
+            else:
+                ap.add_argument(flag, action="store_true", default=False)
         elif f.name == "languages":
             ap.add_argument("--languages", nargs="*", default=[])
         else:
-            ap.add_argument(f"--{f.name.replace('_','-')}", type=type(f.default),
-                            default=f.default)
+            ap.add_argument(flag, type=type(f.default), default=f.default)
     train(TrainConfig(**vars(ap.parse_args())))
