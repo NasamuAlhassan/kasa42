@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,6 +73,9 @@ class TrainConfig:
     seed: int = 20260730
     smoke: bool = False
     languages: list[str] = field(default_factory=list)
+    # "auto" picks the highest stepN.pt in out_dir; or give a path. Empty means
+    # start from the encoder.
+    resume: str = ""
 
 
 def has_native_bf16() -> bool:
@@ -87,6 +91,51 @@ def has_native_bf16() -> bool:
         return False
     major, _ = torch.cuda.get_device_capability()
     return major >= 8
+
+
+STEP_RE = re.compile(r"step(\d+)\.pt$")
+
+
+def find_resume(cfg: TrainConfig) -> Path | None:
+    """Resolve `--resume`: an explicit path, or "auto" for the furthest step."""
+    if not cfg.resume:
+        return None
+    if cfg.resume != "auto":
+        p = Path(cfg.resume)
+        if not p.exists():
+            raise SystemExit(f"--resume {p} does not exist")
+        return p
+
+    saved = sorted(
+        (int(m.group(1)), p)
+        for p in Path(cfg.out_dir).glob("step*.pt")
+        if (m := STEP_RE.search(p.name))
+    )
+    if not saved:
+        print(f"--resume auto: nothing in {cfg.out_dir}, starting fresh")
+        return None
+    return saved[-1][1]
+
+
+def load_checkpoint(path: Path) -> tuple[dict, int]:
+    """Read a checkpoint in either shape, and work out which step it is.
+
+    Checkpoints written before this flag existed are bare state_dicts — and a
+    run started before it existed is exactly the run most likely to need
+    resuming, so that case has to work. What a bare state_dict cannot carry is
+    optimiser state: AdamW's moments restart cold, which costs a few hundred
+    steps of re-adaptation and saves hours. The step then comes from the
+    filename, which is why the naming is worth keeping stable.
+    """
+    blob = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(blob, dict) and "model" in blob:
+        return blob, int(blob.get("step", 0))
+    m = STEP_RE.search(path.name)
+    if not m:
+        raise SystemExit(
+            f"cannot tell which step {path} is: it holds a bare state_dict and "
+            f"its name is not stepN.pt. Rename it, or pass a full checkpoint.")
+    return {"model": blob}, int(m.group(1))
 
 
 def build_lang_map(mixture: dict) -> dict[str, int]:
@@ -237,8 +286,22 @@ def train(cfg: TrainConfig | None = None) -> Path:
         cfg.encoder, vocab_size=len(tokenizer), n_languages=len(lang_map),
         lid_weight=cfg.lid_weight, blank_id=tokenizer.blank,
     )
+    resume_from = find_resume(cfg)
+    blob, start_step = ({}, 0)
+    if resume_from is not None:
+        blob, start_step = load_checkpoint(resume_from)
+        model.load_state_dict(blob["model"])
+        print(f"resumed {resume_from} at step {start_step:,}"
+              + ("" if "optimizer" in blob else "  (no optimiser state — moments restart cold)"))
+        if start_step >= cfg.max_steps:
+            raise SystemExit(
+                f"{resume_from} is already at step {start_step:,} of "
+                f"{cfg.max_steps:,} — raise --max-steps or nothing will run.")
+
     # Carry over DONDO's trained output rows for every character we share.
-    if cfg.transfer_head:
+    # Skipped when resuming: those rows have been trained since, and copying
+    # DONDO's back over them would undo the run being resumed.
+    if cfg.transfer_head and resume_from is None:
         from kasa42.data.vocab import load_dondo_vocab
 
         moved = model.extend_ctc_head(load_dondo_vocab(), tokenizer.vocab, cfg.encoder)
@@ -260,6 +323,14 @@ def train(cfg: TrainConfig | None = None) -> Path:
                                 weight_decay=cfg.weight_decay)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: cosine_lr(s, cfg))
 
+    if blob.get("optimizer"):
+        opt.load_state_dict(blob["optimizer"])
+    if start_step:
+        # Walk the schedule forward so the resumed run continues down the cosine
+        # rather than restarting at the warmup LR and re-heating trained weights.
+        for _ in range(start_step):
+            sched.step()
+
     amp_dtype = None
     if device == "cuda":
         amp_dtype = torch.bfloat16 if has_native_bf16() else torch.float16
@@ -267,6 +338,9 @@ def train(cfg: TrainConfig | None = None) -> Path:
         print(f"gpu={torch.cuda.get_device_name(0)}  sm_{cc[0]}{cc[1]}  "
               f"amp={str(amp_dtype).split('.')[-1]}")
     scaler = torch.amp.GradScaler("cuda", enabled=(amp_dtype is torch.float16))
+    if blob.get("scaler"):
+        scaler.load_state_dict(blob["scaler"])
+    blob = {}  # a full checkpoint holds a whole model; do not pin it for the run
 
     def autocast_ctx():
         if amp_dtype is None:
@@ -280,7 +354,7 @@ def train(cfg: TrainConfig | None = None) -> Path:
         "languages": sorted(lang_map), "lid_weight": cfg.lid_weight,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    step, t0, frozen = 0, time.time(), False
+    step, t0, frozen = start_step, time.time(), False
     model.train()
     while step < cfg.max_steps:
         sampler.set_epoch(step)
@@ -309,16 +383,25 @@ def train(cfg: TrainConfig | None = None) -> Path:
 
             if step % cfg.log_every == 0:
                 el = time.time() - t0
+                # Rate over steps run *this* process. Counting resumed steps
+                # against this run's clock would report a fictitious speed.
+                done = step - start_step
                 print(f"step {step:>6}/{cfg.max_steps}  loss {res['loss'].item():.3f}  "
                       f"ctc {res['ctc_loss'].item():.3f}  "
                       f"lid {res.get('lid_loss', torch.tensor(0.)).item():.3f}  "
                       f"lr {sched.get_last_lr()[0]:.2e}  "
-                      f"{step/max(el,1e-9):.2f} step/s  {el/60:.1f} min")
+                      f"{done/max(el,1e-9):.2f} step/s  {el/60:.1f} min")
 
             if step and step % cfg.save_every == 0:
-                torch.save(model.state_dict(), out / f"step{step}.pt")
+                # Full checkpoint, so a resume from here keeps AdamW's moments.
+                torch.save({"model": model.state_dict(),
+                            "optimizer": opt.state_dict(),
+                            "scaler": scaler.state_dict(),
+                            "step": step}, out / f"step{step}.pt")
             step += 1
 
+    # final.pt stays a bare state_dict: export, evaluate and verify_onnx all
+    # load it directly, and it is the artefact that gets published.
     torch.save(model.state_dict(), out / "final.pt")
     print(f"\nsaved {out/'final.pt'} after {(time.time()-t0)/60:.1f} min")
     return out / "final.pt"
