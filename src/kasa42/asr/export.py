@@ -21,6 +21,10 @@ import torch
 from kasa42.asr.model import Kasa42ForCTC
 
 
+def dir_bytes(p: Path) -> int:
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+
 class ExportWrapper(torch.nn.Module):
     """Inference-only forward: no loss, no labels, fixed output signature."""
 
@@ -76,24 +80,39 @@ def main() -> None:
         },
         opset_version=args.opset, do_constant_folding=True,
     )
-    print(f"  fp32 {fp32.stat().st_size/1e6:.1f} MB")
+    # fp32 weights exceed protobuf's 2 GB ceiling, so ONNX spills the tensors
+    # into sibling files and leaves only the graph in the .onnx. Reporting the
+    # .onnx alone claims a 606M-parameter model is 2.8 MB, and makes the
+    # quantisation ratio come out as "0.0x smaller". Measure the directory,
+    # which at this point holds nothing but the fp32 export.
+    fp32_total = dir_bytes(out_dir)
+    external = fp32_total - fp32.stat().st_size
+    print(f"  fp32 {fp32_total/1e6:.1f} MB "
+          f"({fp32.stat().st_size/1e6:.1f} MB graph + {external/1e6:.1f} MB external weights)")
+    if external > 0:
+        print("  NOTE: the .onnx alone is not loadable — ship the whole directory.")
 
     if not args.no_quantize:
         from onnxruntime.quantization import QuantType, quantize_dynamic
 
         int8 = out_dir / "kasa42_asr.int8.onnx"
         print(f"quantizing -> {int8}")
+        # The quantizer resolves external data and writes one self-contained
+        # file, which is why the int8 model can be shipped on its own.
         quantize_dynamic(str(fp32), str(int8), weight_type=QuantType.QInt8)
         print(f"  int8 {int8.stat().st_size/1e6:.1f} MB "
-              f"({fp32.stat().st_size/int8.stat().st_size:.1f}x smaller)")
+              f"({fp32_total/max(int8.stat().st_size, 1):.1f}x smaller, self-contained)")
 
     (out_dir / "languages.json").write_text(
         json.dumps(cfg["languages"], ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\nVerify before trusting this:")
-    print("  1. run asr/evaluate.py against the ONNX model, not just the torch one")
-    print("  2. confirm int8 WER is within ~1 point of fp32 on the dev split")
-    print("  3. time a Kusaal clip on CPU with the GPU disabled")
+    print(f"  python -m kasa42.asr.verify_onnx --out-dir {out_dir} \\")
+    print(f"      --checkpoint {args.checkpoint} --model-config {args.model_config}")
+    print("  Runs both graphs on CPU at four sequence lengths and compares them")
+    print("  against torch. The tracer bakes shape comparisons in as constants,")
+    print("  so an export can be correct at the traced length and wrong at every")
+    print("  other one — which is every real utterance.")
 
 
 if __name__ == "__main__":
