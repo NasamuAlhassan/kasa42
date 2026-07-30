@@ -30,12 +30,17 @@ import pyarrow.parquet as pq
 TARGET_SR = 16000
 
 
-def pick_one_per_book(manifest: str, config: str, min_sec: float, max_sec: float,
-                      max_books: int, seed: int) -> list[tuple[str, str, int]]:
-    """One representative segment per book: (book, id, shard).
+def pick_clips(manifest: str, config: str, min_sec: float, max_sec: float,
+               max_books: int, per_book: int, seed: int) -> list[tuple[str, str, int]]:
+    """Representative segments per book: (book, id, shard).
 
     Mid-length segments only. Very short clips carry too little voice to embed
     reliably, and very long ones are more likely to span a splice.
+
+    Several per book, because one is not enough to two ends. A single noisy or
+    unusual clip would otherwise misassign a whole book — and more importantly,
+    clips from the same book give a *known same-speaker* baseline to calibrate
+    the threshold against, instead of picking a number and hoping.
     """
     t = pq.read_table(manifest, columns=["config", "id", "book", "duration", "shard"])
     per: dict[str, list] = defaultdict(list)
@@ -51,14 +56,18 @@ def pick_one_per_book(manifest: str, config: str, min_sec: float, max_sec: float
             per[book].append((sid, int(shard or 0), d))
 
     rng = np.random.default_rng(seed)
+    books = sorted(per)
+    if len(books) > max_books:
+        step = len(books) / max_books
+        books = [books[int(i * step)] for i in range(max_books)]
+
     picks = []
-    for book in sorted(per):
+    for book in books:
         rows = sorted(per[book])
-        sid, shard, _ = rows[int(rng.integers(len(rows)))]
-        picks.append((book, sid, shard))
-    if len(picks) > max_books:
-        step = len(picks) / max_books
-        picks = [picks[int(i * step)] for i in range(max_books)]
+        take = min(per_book, len(rows))
+        for j in rng.choice(len(rows), size=take, replace=False):
+            sid, shard, _ = rows[int(j)]
+            picks.append((book, sid, shard))
     return picks
 
 
@@ -104,9 +113,12 @@ def ecapa_embeddings(wavs: list[np.ndarray]):
     except ImportError:
         return None
 
+    # CPU deliberately: this is a 5 MB model over a few dozen clips, and the
+    # GPU is busy with a training run that has already been OOM'd once by a
+    # neighbour. Not worth the risk for a job that takes seconds either way.
     enc = EncoderClassifier.from_hparams(
         source="speechbrain/spkrec-ecapa-voxceleb",
-        savedir="/tmp/spkrec-ecapa")
+        savedir="/tmp/spkrec-ecapa", run_opts={"device": "cpu"})
     embs = []
     for w in wavs:
         sig = torch.from_numpy(np.asarray(w, dtype=np.float32)).unsqueeze(0)
@@ -144,18 +156,23 @@ def main() -> None:
     ap.add_argument("--max-books", type=int, default=40)
     ap.add_argument("--min-sec", type=float, default=4.0)
     ap.add_argument("--max-sec", type=float, default=10.0)
-    ap.add_argument("--threshold", type=float, default=0.75,
+    ap.add_argument("--per-book", type=int, default=3,
+                    help="Clips per book. 2 or more is what makes the same-book "
+                         "baseline — and the auto threshold — possible.")
+    ap.add_argument("--threshold", type=float, default=0.0,
                     help="Cosine distance at which clusters stop merging. "
-                         "0.75 is a workable ECAPA split; raise it to merge more.")
+                         "0 (default) derives it from the same-book pairs, which "
+                         "is the only calibration this corpus can supply.")
     ap.add_argument("--seed", type=int, default=20260730)
     args = ap.parse_args()
 
-    picks = pick_one_per_book(args.manifest, args.config, args.min_sec,
-                              args.max_sec, args.max_books, args.seed)
-    if len(picks) < 2:
-        raise SystemExit(f"only {len(picks)} usable book(s) for {args.config}")
-    print(f"{args.config}: sampling {len(picks)} books "
-          f"({args.min_sec}-{args.max_sec}s each)")
+    picks = pick_clips(args.manifest, args.config, args.min_sec, args.max_sec,
+                       args.max_books, args.per_book, args.seed)
+    n_books = len({b for b, _, _ in picks})
+    if n_books < 2:
+        raise SystemExit(f"only {n_books} usable book(s) for {args.config}")
+    print(f"{args.config}: {len(picks)} clips over {n_books} books "
+          f"({args.per_book} per book, {args.min_sec}-{args.max_sec}s each)")
 
     clips = load_clips(args.data_dir, args.config, picks)
     print(f"decoded {len(clips)} clips")
@@ -170,14 +187,56 @@ def main() -> None:
         print("For a number worth quoting:  pip install speechbrain\n")
         emb = fallback_embeddings(wavs)
 
+    # Drop degenerate embeddings before normalising. A silent or corrupt clip
+    # produces a zero vector, which makes cosine distance undefined — sklearn
+    # then fails with "Cosine affinity cannot be used when X contains zero
+    # vectors", several frames from anything that names the clip responsible.
+    norms = np.linalg.norm(emb, axis=1)
+    ok = norms > 1e-6
+    if not ok.all():
+        dropped = [books[i] for i in np.flatnonzero(~ok)]
+        print(f"\ndropped {len(dropped)} clip(s) with no usable signal "
+              f"(silent or corrupt): {' '.join(sorted(set(dropped)))}")
+        emb, books = emb[ok], [b for b, keep in zip(books, ok) if keep]
+    if len(books) < 2 or len(set(books)) < 2:
+        raise SystemExit(
+            "not enough usable clips to compare — every clip was silent or "
+            "degenerate. Check the audio decodes before trusting any of this.")
+
     emb = emb / (np.linalg.norm(emb, axis=1, keepdims=True) + 1e-8)
     sim = emb @ emb.T
-    off = sim[~np.eye(len(sim), dtype=bool)]
+
+    # Clips from the same book are the same session and so certainly the same
+    # speaker. That distribution is the "same voice" reference this corpus
+    # actually produces — channel noise, clip length and all — which beats
+    # asserting a threshold from general ECAPA folklore.
+    bk = np.array(books)
+    same_book = (bk[:, None] == bk[None, :]) & ~np.eye(len(bk), dtype=bool)
+    cross_book = (bk[:, None] != bk[None, :])
+    within = sim[same_book]
+    across = sim[cross_book]
+
+    print(f"\nmethod: {method}")
+    if within.size:
+        print(f"same-book pairs   (known same speaker): mean {within.mean():.3f}  "
+              f"p5 {np.percentile(within, 5):.3f}  n={within.size}")
+    print(f"cross-book pairs                        : mean {across.mean():.3f}  "
+          f"p5 {np.percentile(across, 5):.3f}  n={across.size}")
+
+    threshold = args.threshold
+    if args.threshold <= 0:
+        if not within.size:
+            raise SystemExit("--threshold auto needs --per-book 2 or more")
+        # Split where same-speaker pairs bottom out: books whose clips sit below
+        # what this corpus produces for one voice are a different voice.
+        threshold = float(1.0 - np.percentile(within, 5))
+        print(f"auto threshold: cosine distance {threshold:.3f} "
+              f"(= similarity {1 - threshold:.3f}, the 5th percentile of same-book pairs)")
 
     from sklearn.cluster import AgglomerativeClustering
 
     labels = AgglomerativeClustering(
-        n_clusters=None, distance_threshold=args.threshold,
+        n_clusters=None, distance_threshold=threshold,
         metric="cosine", linkage="average").fit_predict(emb)
 
     # Hours behind each cluster, so "how many narrators" becomes "is the biggest
@@ -189,20 +248,35 @@ def main() -> None:
         if c == args.config:
             hours[b] += float(d or 0.0) / 3600
 
-    by_cluster: dict[int, list[str]] = defaultdict(list)
+    # A book is assigned by majority vote of its clips. A book whose clips
+    # disagree is more interesting than one that lands cleanly — it means either
+    # a genuinely mixed book or an unreliable clip — so those are named.
+    votes: dict[str, list[int]] = defaultdict(list)
     for lab, book in zip(labels, books):
-        by_cluster[int(lab)].append(book)
+        votes[book].append(int(lab))
 
-    print(f"\nmethod: {method}")
-    print(f"pairwise similarity: mean {off.mean():.3f}  min {off.min():.3f}  "
-          f"max {off.max():.3f}")
-    print(f"\n{len(by_cluster)} cluster(s) over {len(books)} sampled books")
-    print(f"{'cluster':>8s} {'books':>6s} {'sampled h':>10s} {'books':<40s}")
+    by_cluster: dict[int, list[str]] = defaultdict(list)
+    split_books = []
+    for book, labs in votes.items():
+        counts = defaultdict(int)
+        for x in labs:
+            counts[x] += 1
+        winner = max(counts, key=lambda k: (counts[k], -k))
+        by_cluster[winner].append(book)
+        if len(counts) > 1:
+            split_books.append((book, dict(counts)))
+
+    print(f"\n{len(by_cluster)} cluster(s) over {len(votes)} books")
+    print(f"{'cluster':>8s} {'books':>6s} {'hours':>8s}  {'books':<40s}")
     print("-" * 70)
     ranked = sorted(by_cluster.items(), key=lambda kv: -sum(hours[b] for b in kv[1]))
     for lab, bs in ranked:
         h = sum(hours[b] for b in bs)
-        print(f"{lab:>8d} {len(bs):>6d} {h:>10.1f} {' '.join(sorted(bs))[:40]:<40s}")
+        print(f"{lab:>8d} {len(bs):>6d} {h:>8.1f}  {' '.join(sorted(bs))[:40]:<40s}")
+    if split_books:
+        print(f"\n{len(split_books)} book(s) whose clips disagreed "
+              f"(assigned by majority): "
+              + ", ".join(f"{b} {c}" for b, c in split_books[:6]))
 
     top_books, top_h = ranked[0][1], sum(hours[b] for b in ranked[0][1])
     print("-" * 70)
@@ -220,10 +294,17 @@ def main() -> None:
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps({
-        "config": args.config, "method": method, "threshold": args.threshold,
-        "n_clusters": len(by_cluster), "sampled_books": len(books),
-        "similarity": {"mean": float(off.mean()), "min": float(off.min()),
-                       "max": float(off.max())},
+        "config": args.config, "method": method,
+        "threshold": round(threshold, 4), "threshold_auto": args.threshold <= 0,
+        "per_book": args.per_book, "clips": len(books),
+        "n_clusters": len(by_cluster), "sampled_books": len(votes),
+        "similarity": {
+            "same_book_mean": float(within.mean()) if within.size else None,
+            "same_book_p5": float(np.percentile(within, 5)) if within.size else None,
+            "cross_book_mean": float(across.mean()),
+            "cross_book_p5": float(np.percentile(across, 5)),
+        },
+        "books_with_disagreeing_clips": [b for b, _ in split_books],
         "clusters": {str(k): {"books": sorted(v),
                               "hours": round(sum(hours[b] for b in v), 2)}
                      for k, v in by_cluster.items()},
