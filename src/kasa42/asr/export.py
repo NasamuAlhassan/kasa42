@@ -18,7 +18,7 @@ from pathlib import Path
 
 import torch
 
-from kasa42.asr.model import Kasa42ForCTC
+from kasa42.asr.model import Kasa42ForCTC, model_state
 
 
 def dir_bytes(p: Path) -> int:
@@ -54,8 +54,7 @@ def main() -> None:
         cfg["encoder"], vocab_size=cfg["vocab_size"],
         n_languages=len(cfg["languages"]), lid_weight=cfg.get("lid_weight", 0.1),
     )
-    state = torch.load(args.checkpoint, map_location="cpu")
-    model.load_state_dict(state)
+    model.load_state_dict(model_state(args.checkpoint))
     model.eval()
 
     wrapper = ExportWrapper(model).eval()

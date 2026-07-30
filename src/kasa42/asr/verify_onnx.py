@@ -49,13 +49,13 @@ def torch_reference(checkpoint: str, model_config: str, lengths, n_mel: int, see
     """Run the torch model on CPU and return {length: (logits, lid_logits)}."""
     import torch
 
-    from kasa42.asr.model import Kasa42ForCTC
+    from kasa42.asr.model import Kasa42ForCTC, model_state
 
     cfg = json.loads(Path(model_config).read_text(encoding="utf-8"))
     model = Kasa42ForCTC(cfg["encoder"], vocab_size=cfg["vocab_size"],
                          n_languages=len(cfg["languages"]),
                          lid_weight=cfg.get("lid_weight", 0.1))
-    model.load_state_dict(torch.load(checkpoint, map_location="cpu"))
+    model.load_state_dict(model_state(checkpoint))
     model.eval()
 
     out = {}

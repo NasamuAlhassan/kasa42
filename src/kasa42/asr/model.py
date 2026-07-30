@@ -36,6 +36,21 @@ from transformers import Wav2Vec2BertModel
 DONDO = "KhayaAI/w2v-bert-gjn_maw_gur_dag_dga_kus_lxn_wlx_xon_xsm_en"
 
 
+def model_state(path) -> dict:
+    """Return model weights from either checkpoint shape.
+
+    `final.pt` is a bare state_dict. The periodic `stepN.pt` files carry
+    optimiser and scaler state alongside the weights so a run can resume
+    exactly. Both are legitimate inputs to export and evaluation — if the GPU
+    window closes before training finishes, the newest `stepN.pt` *is* the model
+    you ship, and it should not need unwrapping by hand at that moment.
+    """
+    blob = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(blob, dict) and "model" in blob:
+        return blob["model"]
+    return blob
+
+
 class Kasa42ForCTC(nn.Module):
     def __init__(
         self,

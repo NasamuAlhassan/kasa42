@@ -146,7 +146,7 @@ def transcribe(test_set: str, checkpoint: str, vocab: str, batch_size: int = 16,
     from transformers import SeamlessM4TFeatureExtractor
 
     from kasa42.asr.dataset import CharTokenizer, decode_audio
-    from kasa42.asr.model import Kasa42ForCTC
+    from kasa42.asr.model import Kasa42ForCTC, model_state
     from kasa42.asr.train import has_native_bf16
 
     ckpt = Path(checkpoint)
@@ -157,7 +157,7 @@ def transcribe(test_set: str, checkpoint: str, vocab: str, batch_size: int = 16,
     tok = CharTokenizer.from_json(vocab)
     model = Kasa42ForCTC(meta["encoder"], vocab_size=meta["vocab_size"],
                          n_languages=len(languages), blank_id=tok.blank)
-    model.load_state_dict(torch.load(ckpt, map_location="cpu"))
+    model.load_state_dict(model_state(ckpt))
     model.eval().to(device)
 
     fe = SeamlessM4TFeatureExtractor.from_pretrained(meta["encoder"])
