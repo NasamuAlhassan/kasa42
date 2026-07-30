@@ -56,7 +56,16 @@ def main() -> None:
     t = pq.read_table(args.manifest, columns=["config", "id", "text", "duration", "book"])
 
     # Available trainable hours per language, restricted to the train books.
-    pool: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    #
+    # Keyed by id, because `id` is not unique in 13 of the 42 configs: where a
+    # shard holds two recording projects the same verse appears once per
+    # version. Counting both would inflate a language's available hours, and
+    # since `train.load_split` selects by id it would then pull in every copy —
+    # Sisaala reaching ~1.5x its allocation and outweighing Ewe, which is the
+    # imbalance this whole module exists to remove. Keep the shortest copy so
+    # the choice does not depend on manifest row order, which is thread
+    # completion order and therefore not stable across rebuilds.
+    pool: dict[str, dict[str, float]] = defaultdict(dict)
     for config, sid, text, dur, book in zip(
         t.column("config").to_pylist(), t.column("id").to_pylist(),
         t.column("text").to_pylist(), t.column("duration").to_pylist(),
@@ -66,9 +75,11 @@ def main() -> None:
             continue
         if not is_trainable(text):
             continue
-        pool[config].append((sid, float(dur or 0.0)))
+        d = float(dur or 0.0)
+        prev = pool[config].get(sid)
+        pool[config][sid] = d if prev is None else min(prev, d)
 
-    avail = {c: sum(d for _, d in v) / 3600 for c, v in pool.items()}
+    avail = {c: sum(v.values()) / 3600 for c, v in pool.items()}
     weights = temperature_weights(avail, args.alpha)
 
     # Allocate the budget by weight, then clamp to cap and to what exists.
@@ -87,8 +98,8 @@ def main() -> None:
 
     rng = random.Random(args.seed)
     chosen: dict[str, list[str]] = {}
-    for config, items in pool.items():
-        items = sorted(items)
+    for config, by_id in pool.items():
+        items = sorted(by_id.items())
         rng.shuffle(items)
         want, acc, ids = target[config] * 3600, 0.0, []
         for sid, d in items:

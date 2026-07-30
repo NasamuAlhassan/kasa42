@@ -133,7 +133,23 @@ def load_split(cfg: TrainConfig, split: str, lang_map: dict[str, int]):
         if split == "train":
             keep = set(mixture["segment_ids"].get(config, []))
             # Column access on a memory-mapped dataset reads that column only.
-            idx = [i for i, sid in enumerate(ds["id"]) if sid in keep]
+            #
+            # One row per id. `id` repeats in 13 configs — the same verse under
+            # two recording projects — so matching every row with a selected id
+            # would hand back more audio than the mixture allocated, silently
+            # and worst for exactly the tail languages the mixture is protecting.
+            #
+            # Pick the shortest copy, which is what mixture.py costed the id at.
+            # Taking whichever came first in file order instead would make the
+            # hours it reports quietly wrong.
+            best: dict[str, tuple[float, int]] = {}
+            for i, (sid, dur) in enumerate(zip(ds["id"], ds["duration"])):
+                if sid not in keep:
+                    continue
+                d = float(dur or 0.0)
+                if sid not in best or d < best[sid][0]:
+                    best[sid] = (d, i)
+            idx = sorted(i for _, i in best.values())
         else:
             idx = [i for i, src in enumerate(ds["source_file"])
                    if book_split.get(str(src).split(".")[0], "train") == split]
