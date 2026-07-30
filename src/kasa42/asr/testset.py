@@ -59,6 +59,24 @@ SCHEMA = pa.schema([
 ])
 
 
+def _one_per_id(pairs: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Collapse repeated ids, keeping the lowest shard so the result is stable.
+
+    `id` is not unique in every config. Where a shard holds two recording
+    projects, the same verse id appears once per version — same text, different
+    narrator — and the manifest lists each physical row. Sampling raw rows would
+    draw one utterance twice while claiming the cap had been met, and then
+    weight it double in the WER table.
+    """
+    seen: set[str] = set()
+    out: list[tuple[str, int]] = []
+    for sid, shard in pairs:
+        if sid not in seen:
+            seen.add(sid)
+            out.append((sid, shard))
+    return out
+
+
 def choose(manifest: str, splits: dict, mixture: dict, max_per_config: int,
            seed: int, min_leaked: int) -> dict[str, dict]:
     """Pick honest and leaked ids per config from metadata alone.
@@ -94,8 +112,8 @@ def choose(manifest: str, splits: dict, mixture: dict, max_per_config: int,
     rng = random.Random(seed)
     out: dict[str, dict] = {}
     for config in sorted(set(t.column("config").to_pylist())):
-        h = sorted(honest.get(config, []))
-        l = sorted(leaked.get(config, []))
+        h = _one_per_id(sorted(honest.get(config, [])))
+        l = _one_per_id(sorted(leaked.get(config, [])))
         rng.shuffle(h)
         rng.shuffle(l)
         enough = len(l) >= min_leaked
@@ -206,7 +224,7 @@ def main() -> None:
     lw = pq.ParquetWriter(l_path, SCHEMA, compression="zstd")
 
     summary: dict[str, dict] = {}
-    missing_total = 0
+    missing_total = repeat_total = 0
     print(f"{'config':24s} {'honest':>7s} {'leaked':>7s} {'h pool':>8s} {'l pool':>8s} {'shards':>7s}")
     print("-" * 68)
     try:
@@ -230,7 +248,7 @@ def main() -> None:
             order += [i for i in range(len(shard_files)) if i not in hint]
 
             todo = set(wanted)
-            h_n = l_n = touched = 0
+            h_n = l_n = touched = repeats = 0
             for i in order:
                 if not todo:
                     break
@@ -240,25 +258,36 @@ def main() -> None:
                     continue
                 got = to_schema(tbl, config)
                 got_ids = got.column("id").to_pylist()
-                h_idx = [j for j, s in enumerate(got_ids) if s in h_set]
-                l_idx = [j for j, s in enumerate(got_ids) if s in l_set]
+                # Take each id once. `take_rows` filters on `todo`, which
+                # already excludes anything written by an earlier shard, but a
+                # single shard can still hold the same id twice — so discard as
+                # we go rather than matching the whole selection set.
+                h_idx, l_idx = [], []
+                for j, s in enumerate(got_ids):
+                    if s not in todo:
+                        repeats += 1
+                        continue
+                    todo.discard(s)
+                    (h_idx if s in h_set else l_idx).append(j)
                 if h_idx:
                     hw.write_table(got.take(h_idx))
                     h_n += len(h_idx)
                 if l_idx:
                     lw.write_table(got.take(l_idx))
                     l_n += len(l_idx)
-                todo -= set(got_ids)
 
             missing_total += len(todo)
+            repeat_total += repeats
             flag = f"  {len(todo)} ids not found" if todo else ""
+            if repeats:
+                flag += f"  ({repeats} repeated id rows skipped)"
             print(f"{config:24s} {h_n:>7,} {l_n:>7,} {sel['honest_pool']:>8,} "
                   f"{sel['leaked_pool']:>8,} {touched:>7}{flag}")
             summary[config] = {
                 "honest_n": h_n, "leaked_n": l_n,
                 "honest_pool": sel["honest_pool"], "leaked_pool": sel["leaked_pool"],
                 "leaked_excluded": sel["leaked_excluded"],
-                "missing": len(todo),
+                "missing": len(todo), "repeated_id_rows": repeats,
             }
     finally:
         hw.close()
@@ -283,6 +312,14 @@ def main() -> None:
         print(f"\n{missing_total} selected id(s) were never found in the shards. "
               f"That means the manifest and {args.data_dir} disagree — "
               f"rebuild the manifest with --local-root before trusting the split.")
+    if repeat_total:
+        print(f"\n{repeat_total} row(s) repeated an id already taken — kept once each.")
+        print("  `id` is not a unique key in every config: where one shard holds two")
+        print("  recording projects, the same verse appears once per version.")
+        print("  Worth knowing beyond this file — asr/train.load_split selects by id")
+        print("  too, so those configs contribute more rows than the mixture's")
+        print("  target hours. Check with:")
+        print("    python -m kasa42.data.build_manifest --check-ids")
 
     (out_dir / "testset_summary.json").write_text(json.dumps({
         "seed": args.seed, "max_per_config": args.max_per_config,

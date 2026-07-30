@@ -144,6 +144,42 @@ def build_config(config: str, iso: str, files: list[str], workers: int,
     return out
 
 
+def check_ids(manifest: str) -> None:
+    """Report configs where `id` repeats, and what it costs downstream.
+
+    Everything that selects segments — the mixture, `train.load_split`, the test
+    sets — treats `id` as a key. Where a config holds two recording projects,
+    the same verse can appear once per version under one id, so selecting an id
+    pulls in more than one row and a language contributes more than its target
+    hours. Silent, and invisible in the hours accounting, which counts rows.
+    """
+    from collections import Counter
+
+    t = pq.read_table(manifest, columns=["config", "id", "duration"])
+    rows: dict[str, Counter] = {}
+    hours: dict[str, float] = {}
+    for c, i, d in zip(t.column("config").to_pylist(), t.column("id").to_pylist(),
+                       t.column("duration").to_pylist()):
+        rows.setdefault(c, Counter())[i] += 1
+        hours[c] = hours.get(c, 0.0) + float(d or 0.0) / 3600
+
+    bad = {c: n for c, n in rows.items() if len(n) != sum(n.values())}
+    if not bad:
+        print(f"{manifest}: `id` is unique in all {len(rows)} configs.")
+        return
+
+    print(f"{'config':24s} {'rows':>9s} {'unique':>9s} {'factor':>7s} {'h if deduped':>13s}")
+    print("-" * 66)
+    for c in sorted(bad, key=lambda c: -(sum(rows[c].values()) / len(rows[c]))):
+        n, u = sum(rows[c].values()), len(rows[c])
+        print(f"{c:24s} {n:>9,} {u:>9,} {n/u:>6.2f}x {hours[c]*u/n:>12.1f}")
+    print("-" * 66)
+    print(f"{len(bad)} of {len(rows)} configs repeat ids.")
+    print("Selecting by id therefore over-samples them relative to the mixture's")
+    print("target hours. The last column is what each would contribute if one row")
+    print("per id were taken.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", default="results/manifest.parquet")
@@ -159,7 +195,13 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="Rebuild configs already on disk.")
     ap.add_argument("--merge-only", action="store_true",
                     help="Skip fetching; just merge whatever parts exist.")
+    ap.add_argument("--check-ids", action="store_true",
+                    help="Report configs where `id` is not unique, and exit.")
     args = ap.parse_args()
+
+    if args.check_ids:
+        check_ids(args.out)
+        return
 
     parts = Path(args.parts_dir)
     parts.mkdir(parents=True, exist_ok=True)
