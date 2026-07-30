@@ -205,8 +205,20 @@ def load_split(cfg: TrainConfig, split: str, lang_map: dict[str, int]):
                     best[sid] = (d, i)
             idx = sorted(i for _, i in best.values())
         else:
-            idx = [i for i, src in enumerate(ds["source_file"])
-                   if book_split.get(str(src).split(".")[0], "train") == split]
+            # One row per id here too. `id` repeats in 13 configs, and counting
+            # an utterance twice in a dev or test split silently double-weights
+            # it in the WER — the same defect the training branch above avoids,
+            # and the one `asr/testset.py` was fixed for. The two paths have to
+            # agree or the numbers do not mean the same thing.
+            seen: set[str] = set()
+            idx = []
+            for i, (sid, src) in enumerate(zip(ds["id"], ds["source_file"])):
+                if book_split.get(str(src).split(".")[0], "train") != split:
+                    continue
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                idx.append(i)
 
         if not idx:
             continue
