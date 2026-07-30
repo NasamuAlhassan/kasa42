@@ -40,6 +40,12 @@ def main() -> None:
     ap.add_argument("--max-hours", type=float, default=20.0,
                     help="VITS converges long before the full 80 h; more is slower, not better.")
     ap.add_argument("--check-clips", type=int, default=6)
+    ap.add_argument("--only-books", nargs="*", default=[],
+                    help="Restrict to these books. A single version can still "
+                         "hold more than one narrator; speaker_check.py clusters "
+                         "the books and names the largest cluster, which is what "
+                         "belongs here. Filtering to one voice is what keeps "
+                         "single-speaker VITS from averaging two together.")
     args = ap.parse_args()
 
     import datasets
@@ -77,10 +83,17 @@ def main() -> None:
     dropped = Counter()
     books_seen: dict[str, int] = {}
 
+    keep_books = set(args.only_books)
+    if keep_books:
+        print(f"restricted to {len(keep_books)} book(s): {' '.join(sorted(keep_books))}")
+
     for row in ds:
         m = SOURCE_RE.match(str(row["source_file"]))
         if not m or m.group(3) != dominant:
             dropped["other-version"] += 1
+            continue
+        if keep_books and m.group(1) not in keep_books:
+            dropped["other-book"] += 1
             continue
         dur = float(row.get("duration") or 0.0)
         if not (args.min_sec <= dur <= args.max_sec):
