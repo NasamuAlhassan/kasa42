@@ -48,7 +48,12 @@ def main() -> None:
     files = sorted(Path(args.data_dir, args.config).glob("*.parquet"))
     if not files:
         raise SystemExit(f"no parquet under {args.data_dir}/{args.config}")
+    from kasa42.asr.dataset import undecoded_audio
+
     ds = datasets.load_dataset("parquet", data_files=[str(p) for p in files], split="train")
+    # Same reason as training: we hand raw bytes to soundfile ourselves, and
+    # datasets 5.x would otherwise demand torchcodec to decode them for us.
+    ds = undecoded_audio(ds)
     print(f"{args.config}: {len(ds):,} segments")
 
     versions = Counter()

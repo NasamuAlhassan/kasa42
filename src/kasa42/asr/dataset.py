@@ -24,6 +24,29 @@ from kasa42.data.text import normalize
 TARGET_SR = 16000
 
 
+def undecoded_audio(ds):
+    """Stop `datasets` decoding the audio column for us.
+
+    From datasets 5.x the `Audio` feature decodes through **torchcodec**, and it
+    fires on every row fetch — so a DataLoader worker dies with "To support
+    decoding audio data, please install 'torchcodec'" the moment training starts,
+    even though nothing here wants a decoded array.
+
+    We decode with soundfile in `decode_audio` instead: the corpus is 16 kHz mono
+    PCM-16 WAV, which soundfile reads with no ffmpeg and no extra dependency, and
+    letting datasets decode first would only mean doing the work twice. Setting
+    `decode=False` leaves the column as `{bytes, path}`, which `decode_audio`
+    already handles.
+
+    Metadata-only, so it costs nothing and is safe to call on any split.
+    """
+    import datasets
+
+    if "audio" not in ds.column_names:
+        return ds
+    return ds.cast_column("audio", datasets.Audio(decode=False))
+
+
 def decode_audio(blob) -> np.ndarray:
     """Decode the parquet audio cell to mono float32 at 16 kHz."""
     import soundfile as sf

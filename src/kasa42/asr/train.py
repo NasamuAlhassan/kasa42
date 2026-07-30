@@ -24,7 +24,12 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from kasa42.asr.dataset import CharTokenizer, Collator, LengthBucketSampler
+from kasa42.asr.dataset import (
+    CharTokenizer,
+    Collator,
+    LengthBucketSampler,
+    undecoded_audio,
+)
 from kasa42.asr.model import Kasa42ForCTC
 
 
@@ -122,6 +127,7 @@ def load_split(cfg: TrainConfig, split: str, lang_map: dict[str, int]):
         ds = datasets.load_dataset(
             "parquet", data_files=[str(p) for p in files], split="train",
         )
+        ds = undecoded_audio(ds)
         book_split = splits.get(config, {}).get("book_to_split", {})
 
         if split == "train":
