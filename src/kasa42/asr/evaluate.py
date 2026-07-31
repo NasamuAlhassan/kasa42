@@ -200,7 +200,7 @@ def save(scores: dict, path: str) -> None:
 # --------------------------------------------------------------------- inference
 
 def transcribe(test_set: str, checkpoint: str, vocab: str, batch_size: int = 16,
-               device: str | None = None) -> list[dict]:
+               device: str | None = None, batch_duration: float = 120.0) -> list[dict]:
     """Run the trained model over a test-set parquet and return scoreable records.
 
     Torch is imported here rather than at module scope so that the scoring
@@ -232,24 +232,60 @@ def transcribe(test_set: str, checkpoint: str, vocab: str, batch_size: int = 16,
     configs = tbl.column("config").to_pylist()
     texts = tbl.column("text").to_pylist()
 
-    # Sort by duration so each batch pads to something close to its own longest
-    # member, exactly as LengthBucketSampler does for training.
+    # Sort by duration so each batch pads close to its own longest member, then
+    # cut batches on *padded duration* rather than on a count.
+    #
+    # A fixed count is the wrong unit here, and dangerously so: sorting ascending
+    # puts every longest clip in the final batches, so 16 x 29 s asks for 464 s
+    # of audio at once — nearly three times the budget training runs at. It
+    # survives while the card is empty and OOMs at utterance 8,000 of 8,400 when
+    # a neighbour grows, i.e. it fails at the end of the job, having done all the
+    # work. Budgeting duration makes the cost of the last batch equal the cost of
+    # the first.
     order = sorted(range(tbl.num_rows), key=lambda i: durations[i])
-    amp = torch.bfloat16 if (device == "cuda" and has_native_bf16()) else None
+    batches: list[list[int]] = []
+    cur: list[int] = []
+    longest = 0.0
+    for i in order:
+        d = float(durations[i] or 0.0)
+        if cur and (max(longest, d) * (len(cur) + 1) > batch_duration
+                    or len(cur) >= batch_size):
+            batches.append(cur)
+            cur, longest = [i], d
+        else:
+            cur.append(i)
+            longest = max(longest, d)
+    if cur:
+        batches.append(cur)
+    print(f"  {len(batches):,} batches, "
+          f"{max(len(b) for b in batches)} max utts, "
+          f"{batch_duration:.0f}s budget")
 
-    out: list[dict] = []
-    for start in range(0, len(order), batch_size):
-        idx = order[start:start + batch_size]
+    amp = torch.bfloat16 if (device == "cuda" and has_native_bf16()) else None
+    ctx = lambda: (torch.autocast("cuda", dtype=amp) if amp is not None  # noqa: E731
+                   else contextlib.nullcontext())
+
+    def infer(idx: list[int]) -> None:
+        """Transcribe one batch, halving it if the GPU refuses."""
         sub = tbl.take(idx)
         wavs = [decode_audio(b) for b in sub.column("audio").to_pylist()]
         feats = fe(wavs, sampling_rate=16000, return_tensors="pt",
                    padding=True, return_attention_mask=True)
-
-        ctx = (torch.autocast("cuda", dtype=amp) if amp is not None
-               else contextlib.nullcontext())
-        with torch.no_grad(), ctx:
-            res = model(input_features=feats["input_features"].to(device),
-                        attention_mask=feats["attention_mask"].to(device))
+        try:
+            with torch.no_grad(), ctx():
+                res = model(input_features=feats["input_features"].to(device),
+                            attention_mask=feats["attention_mask"].to(device))
+        except torch.OutOfMemoryError:
+            # The card is shared and the neighbour moves. Splitting costs a
+            # little time; failing loses the whole run's inference.
+            if len(idx) == 1:
+                raise
+            del feats, wavs
+            torch.cuda.empty_cache()
+            print(f"    OOM on {len(idx)} utts — splitting")
+            infer(idx[: len(idx) // 2])
+            infer(idx[len(idx) // 2:])
+            return
 
         pred = res["logits"].argmax(-1).cpu()
         lens = res["input_lengths"].cpu()
@@ -263,8 +299,12 @@ def transcribe(test_set: str, checkpoint: str, vocab: str, batch_size: int = 16,
                 "hypothesis": tok.decode(pred[j][: int(lens[j])]),
                 "language_pred": languages[int(lid[j])],
             })
-        if start % (batch_size * 25) == 0:
-            print(f"  {start:>6,}/{len(order):,}")
+
+    out: list[dict] = []
+    for n, idx in enumerate(batches):
+        infer(idx)
+        if n % 25 == 0:
+            print(f"  {len(out):>6,}/{len(order):,}")
     return out
 
 
@@ -277,13 +317,20 @@ def main() -> None:
     ap.add_argument("--honest", default="results/testset_honest.parquet")
     ap.add_argument("--leaked", default="results/testset_leaked.parquet")
     ap.add_argument("--out-dir", default="results/eval")
-    ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--batch-size", type=int, default=64,
+                    help="Hard cap on utterances per batch; --batch-duration "
+                         "is what normally binds.")
+    ap.add_argument("--batch-duration", type=float, default=120.0,
+                    help="Seconds of padded audio per batch. Lower it if the "
+                         "card is busy; inference has no backward pass, so this "
+                         "can sit below the training budget safely.")
     args = ap.parse_args()
 
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
 
     print("--- honest (book-disjoint) ---")
-    honest_recs = transcribe(args.honest, args.checkpoint, args.vocab, args.batch_size)
+    honest_recs = transcribe(args.honest, args.checkpoint, args.vocab,
+                             args.batch_size, batch_duration=args.batch_duration)
     honest = score_by_language(honest_recs)
     print("\n" + report(honest, "KASA-42 — book-disjoint test") + "\n")
     save(honest, f"{args.out_dir}/honest.json")
@@ -294,7 +341,8 @@ def main() -> None:
         return
 
     print("--- leaked (random split over seen books) ---")
-    leaked_recs = transcribe(args.leaked, args.checkpoint, args.vocab, args.batch_size)
+    leaked_recs = transcribe(args.leaked, args.checkpoint, args.vocab,
+                             args.batch_size, batch_duration=args.batch_duration)
     leaked = score_by_language(leaked_recs)
     save(leaked, f"{args.out_dir}/leaked.json")
 
