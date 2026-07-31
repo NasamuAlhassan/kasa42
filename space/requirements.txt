@@ -1,0 +1,9 @@
+# CPU-only serving. No torch: onnxruntime carries the graph, and the
+# SeamlessM4T feature extractor computes filterbanks in numpy, so the whole
+# demo runs on a free Space without a training stack.
+gradio>=4.44.0
+onnxruntime>=1.19.0
+transformers>=4.44.0
+numpy>=1.26.0
+librosa>=0.10.2
+soundfile>=0.12.1

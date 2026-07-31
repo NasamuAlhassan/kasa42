@@ -105,6 +105,17 @@ def main() -> None:
     (out_dir / "languages.json").write_text(
         json.dumps(cfg["languages"], ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Ship the feature extractor beside the graph. Training and evaluation build
+    # features with the *encoder's* config; a server that reaches for
+    # facebook/w2v-bert-2.0 instead is guessing that the two agree, and if they
+    # ever diverge the demo computes different features than the model was
+    # trained on and degrades silently rather than failing. Saving it also means
+    # serving needs no network.
+    from transformers import SeamlessM4TFeatureExtractor
+
+    SeamlessM4TFeatureExtractor.from_pretrained(cfg["encoder"]).save_pretrained(out_dir)
+    print(f"  feature extractor -> {out_dir/'preprocessor_config.json'}")
+
     print("\nVerify before trusting this:")
     print(f"  python -m kasa42.asr.verify_onnx --out-dir {out_dir} \\")
     print(f"      --checkpoint {args.checkpoint} --model-config {args.model_config}")

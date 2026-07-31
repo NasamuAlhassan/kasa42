@@ -60,7 +60,15 @@ class Engine:
             from transformers import SeamlessM4TFeatureExtractor
 
             self.tokenizer = CharTokenizer.from_json(str(VOCAB_PATH))
-            self.fe = SeamlessM4TFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
+            # Prefer the config shipped with the export: it is the encoder's own,
+            # which is what training and evaluation used. Falling straight to
+            # facebook/w2v-bert-2.0 assumes the two agree, and a mismatch here
+            # changes the features under the model without raising anything.
+            fe_src = (str(EXPORT_DIR)
+                      if (EXPORT_DIR / "preprocessor_config.json").exists()
+                      else "facebook/w2v-bert-2.0")
+            self.fe = SeamlessM4TFeatureExtractor.from_pretrained(fe_src)
+            print(f"[engine] feature extractor from {fe_src}")
 
             if mode == "onnx":
                 import onnxruntime as ort
@@ -176,4 +184,14 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    build_ui().launch()
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--share", action="store_true",
+                    help="Public gradio.live link, for testing from a phone while "
+                         "the box is still up. Expires in 72 h — a Space is the "
+                         "durable answer.")
+    ap.add_argument("--port", type=int, default=7860)
+    args = ap.parse_args()
+    build_ui().launch(share=args.share, server_name="0.0.0.0",
+                      server_port=args.port)
