@@ -58,6 +58,10 @@ def main() -> None:
     ap.add_argument("--shard-mb", type=float, default=400.0,
                     help="Target shard size. The Hub is happiest in the "
                          "200-500 MB range.")
+    ap.add_argument("--row-group-mb", type=float, default=24.0,
+                    help="Target row group size. The Hub viewer refuses to "
+                         "scan more than 300 MB to render a row, so this must "
+                         "stay well under that.")
     args = ap.parse_args()
 
     root, out = Path(args.root), Path(args.out)
@@ -108,10 +112,21 @@ def main() -> None:
 
         for i, chunk in enumerate(shards):
             name = f"{split}-{i:05d}-of-{len(shards):05d}.parquet"
+            # Row groups must stay small. PyArrow defaults to ~1M rows a group,
+            # which for audio makes each shard a single 300 MB+ group — and the
+            # Hub's viewer must read a whole row group to show one row, so it
+            # rejects the dataset with "Scan size limit exceeded". Size the
+            # groups from the audio actually in this shard, and write a page
+            # index so readers can seek within a group instead of scanning it.
+            mean = max(sum(len(r["audio"]["bytes"]) for r in chunk) / len(chunk), 1)
+            rows_per_group = max(int(args.row_group_mb * 1e6 / mean), 1)
             pq.write_table(pa.Table.from_pylist(chunk, schema=schema),
-                           out / "data" / name, compression="zstd")
+                           out / "data" / name, compression="zstd",
+                           row_group_size=rows_per_group, write_page_index=True)
             mb = (out / "data" / name).stat().st_size / 1e6
-            print(f"  {name}  {len(chunk):>6,} rows  {mb:>7.1f} MB")
+            groups = pq.ParquetFile(out / "data" / name).num_row_groups
+            print(f"  {name}  {len(chunk):>6,} rows  {mb:>7.1f} MB  "
+                  f"{groups} group(s) of ~{rows_per_group}")
         written[split] = len(items)
         print(f"{split}: {len(items):,} rows in {len(shards)} shard(s)\n")
 
