@@ -147,9 +147,22 @@ def build_ui():
     def run(audio):
         if audio is None:
             return "", "", ""
-        sr, wav = audio
-        text, lang, conf, dt = engine.transcribe(sr, np.asarray(wav))
-        rtf = dt / max(len(np.asarray(wav)) / sr, 1e-9)
+        wav = np.asarray(audio[1])
+        try:
+            sr = audio[0]
+            if wav.size < sr // 4:
+                return "[too short] record at least half a second", "", ""
+            text, lang, conf, dt = engine.transcribe(sr, wav)
+        except Exception as e:  # noqa: BLE001 - the browser shows "Error" and nothing else
+            # Gradio renders a bare "Error" chip and keeps the traceback in the
+            # server log, which is useless to anyone testing from a phone. Put
+            # the message where the person clicking the button can read it, and
+            # still print the traceback for whoever has the terminal.
+            import traceback
+
+            traceback.print_exc()
+            return f"[{type(e).__name__}] {e}", "", ""
+        rtf = dt / max(len(wav) / sr, 1e-9)
         return text, f"{pretty(lang)} — {conf:.0%} confident", \
             f"{dt*1000:.0f} ms  ({rtf:.2f}x real time, {engine.mode})"
 
