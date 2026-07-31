@@ -84,6 +84,43 @@ inferred, at 96.8% mean accuracy over 42 classes (chance is 2.4%).
 Per-language WER ranges from 13.0% (Gonja) to 69.8% (Kabiye). **Read those to
 the nearest few points, not to one decimal** — see the variance note below.
 
+## Against other systems
+
+Every system scored on the same book-disjoint test set, with the same text
+normalisation applied to references and hypotheses alike. Crucially, each row
+recomputes **both** sides over only the languages that system covers — comparing
+an average over 34 covered languages against an average over all 42 would
+flatter whichever system declined the hardest ones.
+
+| System | Languages | Their WER | Ours | Their CER | Ours |
+|---|---|---|---|---|---|
+| Whisper large-v3 | 42 | 102.3% | **30.2%** | 57.3% | **10.5%** |
+| **MMS-1B-all** | **34** | **25.7%** | 29.2% | 12.1% | **9.7%** |
+| DONDO (unconditioned) | 8 | 75.9% | **27.6%** | 40.8% | **14.1%** |
+
+**MMS-1B-all beats us on WER by 3.5pp.** We beat it on CER by 2.4pp, and cover
+eight languages it has no adapter for (both Twis, Dagbani, Dangme, Fante,
+Fulfulde and two others). It is also roughly 1.7× our parameter count and does
+not do language identification.
+
+That WER/CER split is the informative part. MMS's ratio is 2.1×, ours 3.0× — we
+get **more characters right and more words wrong**, which is a word-segmentation
+weakness rather than an acoustic one. The same signature appears in our
+per-language table (Bissa 41.7% WER against 9.5% CER). Space prediction is the
+obvious place to look next, and we have not looked yet.
+
+Whisper exceeds 100% WER because WER counts insertions: it transcribes these
+languages into something else entirely and emits more words than the reference
+contains. It was never trained on them.
+
+**The DONDO row is not a fair comparison and should not be cited as one.**
+DONDO conditions on a one-hot language prefix; `asr/baselines.py` supplies none
+and runs it as a plain CTC model, so 75.9% is a lower bound on its ability, not a
+measurement of it. Its published figure is ~10.3% average WER on 11 languages.
+We report the number for transparency about what we ran, not as evidence about
+DONDO. Fixing this needs the conditioning implemented, which the window did not
+allow.
+
 ## The leakage experiment, and its negative result
 
 `ghana-speech` is Bible audio: `source_file` parses as `BOOK.CHAPTER.VERSION`.
@@ -210,9 +247,8 @@ first multilingual Ghanaian ASR.** The claims are narrower: broader language
 coverage in one checkpoint, language ID that DONDO does not have, and results on
 a split that does not leak, with the leakage question actually tested.
 
-Baseline systems have not yet been scored on this test set, so the numbers above
-should not be read as better or worse than DONDO, MMS or Whisper — only as
-honestly measured.
+See the comparison below for how this sits against MMS, Whisper and DONDO. It is
+not first on every metric, and the section says so.
 
 ## Acknowledgements
 

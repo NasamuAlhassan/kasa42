@@ -115,6 +115,10 @@ def run_dondo(records, device: str, batch_size: int = 8):
     if skipped:
         print(f"  outside DONDO's 11 languages ({len(skipped)}): "
               f"{', '.join(iso_of(c) for c in skipped)}")
+    print("\n  WARNING: this runs DONDO as a plain CTC model. It conditions on a")
+    print("  one-hot language prefix, and nothing here supplies one, so the score")
+    print("  below is a lower bound on what DONDO can do — not a fair comparison.")
+    print("  Report it as unconditioned or not at all.")
     return out
 
 

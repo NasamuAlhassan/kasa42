@@ -106,8 +106,14 @@ broader language coverage, language ID that DONDO does not have, and results on
 a split that does not leak.
 
 Baselines are reported on our own book-disjoint test set so that every number
-sits on the same axis. DONDO is evaluated *with* the language prefix supplied —
-its favourable setting, and the fair one.
+sits on the same axis, and each comparison is recomputed over the languages that
+system actually covers — MMS has adapters for 34 of the 42, DONDO for 8.
+
+**We do not claim a fair DONDO comparison.** DONDO conditions on a one-hot
+language prefix and `asr/baselines.py` supplies none, running it as a plain CTC
+model. Its 75.9% here is a lower bound on what it can do, and should be read as
+"unconditioned", not as DONDO's quality. An earlier version of this file claimed
+the prefix *was* supplied; it never was.
 
 Models are Apache-2.0. The `ghana-speech` data is CC BY-NC 4.0, so trained
 weights are released for non-commercial research use.
