@@ -1,0 +1,5 @@
+# apt packages for the Space image. Gradio decodes browser audio through pydub,
+# which shells out to ffprobe: without it every microphone recording fails in
+# preprocess_data, before the app's own code runs, so the UI shows a bare
+# "Error" and the traceback never reaches the handler.
+ffmpeg
