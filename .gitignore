@@ -19,3 +19,11 @@ results/testset.jsonl
 
 .ipynb_checkpoints/
 .DS_Store
+
+# Model files copied into space/ for deployment. The int8 graph alone is 609 MB
+# and belongs on the Hub, not in git history — `git add -A` after staging the
+# Space would otherwise try to commit it.
+/space/*.onnx
+/space/vocab.json
+/space/languages.json
+/space/preprocessor_config.json
