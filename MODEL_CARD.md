@@ -121,6 +121,47 @@ We report the number for transparency about what we ran, not as evidence about
 DONDO. Fixing this needs the conditioning implemented, which the window did not
 allow.
 
+## Cross-corpus: does it know Kusaal, or one ministry's recordings?
+
+Every number above comes from `ghana-speech`. A model trained on one recording
+project and tested on the same one cannot distinguish having learned a language
+from having learned a studio. So we scored it on an independent Kusaal corpus —
+[Kusaal ASR Dataset](https://www.kaggle.com/datasets/alhassanprince/kusaal-asr-dataset),
+81.7 h from Faith Comes By Hearing and Global Recordings Network, forced-aligned
+into 9.5 s clips against GILLBT text.
+
+Restricted to the **11 books KASA-42 held out of training**, because scripture
+corpora share a translation: on any other book the model would already have
+trained on the sentences, and only the audio would be new.
+
+| | ghana-speech (version 3752) | Kaggle corpus (FCBH / GRN) |
+|---|---|---|
+| Clips | 200 | **2,895** (8.35 h) |
+| WER | 30.2% | **37.9%** |
+| CER | 16.3% | **21.9%** |
+| Language ID | 95.5% | **99.8%** |
+
+**Transcription degrades about 25% relative** on unfamiliar recordings of the
+same language and domain. That is the honest cost of changing recording source,
+and it is the number to quote when asking what this model would do on audio from
+anywhere else.
+
+**Language identification improves, to 99.8%.** The LID head evidently keys on
+the language rather than the channel — it is more robust to a change of studio
+than the transcription is. On 2,895 clips that is a tighter estimate than any
+per-language figure elsewhere in this card.
+
+Three caveats we state rather than leave implied:
+
+* Both corpora are **scripture**. This measures robustness to recording
+  conditions, not to conversational speech, which remains untested.
+* The two may use **different Kusaal translations** — GILLBT here against
+  whatever version 3752 uses — so some of the WER gap is vocabulary and phrasing
+  rather than acoustics.
+* The Kaggle clips average 10.4 s against `ghana-speech`'s ~7.9 s, and longer
+  clips usually score *lower* WER because errors amortise over more words. If
+  anything that understates the degradation.
+
 ## The leakage experiment, and its negative result
 
 `ghana-speech` is Bible audio: `source_file` parses as `BOOK.CHAPTER.VERSION`.
