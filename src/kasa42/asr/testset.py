@@ -78,7 +78,7 @@ def _one_per_id(pairs: list[tuple[str, int]]) -> list[tuple[str, int]]:
 
 
 def choose(manifest: str, splits: dict, mixture: dict, max_per_config: int,
-           seed: int, min_leaked: int) -> dict[str, dict]:
+           seed: int, min_leaked: int, match_books: bool = False) -> dict[str, dict]:
     """Pick honest and leaked ids per config from metadata alone.
 
     `is_trainable` gates both sets identically. Segments carrying digits (verse
@@ -90,6 +90,25 @@ def choose(manifest: str, splits: dict, mixture: dict, max_per_config: int,
     trained = {c: set(v) for c, v in mixture.get("segment_ids", {}).items()}
     honest: dict[str, list] = defaultdict(list)
     leaked: dict[str, list] = defaultdict(list)
+
+    # Without this, the two sets differ in more than whether the book was seen.
+    # The honest side draws from the 2-5 held-out books of a language; the
+    # leaked side draws across all 20-60 train books. Measured on the real
+    # split that is 4.2 books against 27.2 — 6.5x the content diversity, and
+    # 4.9% shorter references, both of which make the leaked side harder for
+    # reasons that have nothing to do with leakage. Restricting the leaked draw
+    # to as many train books as the config has test books removes the dominant
+    # confound, at the cost of a smaller pool.
+    allowed: dict[str, set[str]] = {}
+    if match_books:
+        pick = random.Random(seed ^ 0x5EED)
+        for config, sp in splits.items():
+            b2s = sp.get("book_to_split", {})
+            n_test = sum(1 for v in b2s.values() if v == "test")
+            train_books = sorted(b for b, v in b2s.items() if v == "train")
+            if train_books and n_test:
+                allowed[config] = set(pick.sample(
+                    train_books, min(n_test, len(train_books))))
 
     b2s_cache: dict[str, dict] = {}
     for config, sid, text, book, shard in zip(
@@ -106,6 +125,8 @@ def choose(manifest: str, splits: dict, mixture: dict, max_per_config: int,
                 honest[config].append((sid, int(shard or 0)))
         elif where == "train":
             # Held out from this model, but from a book it has seen.
+            if match_books and book not in allowed.get(config, {book}):
+                continue
             if sid not in trained.get(config, ()) and is_trainable(text):
                 leaked[config].append((sid, int(shard or 0)))
 
@@ -204,14 +225,19 @@ def main() -> None:
                     help="Configs with a smaller leaked pool are excluded from "
                          "the leak table rather than reported as noise.")
     ap.add_argument("--configs", nargs="*")
+    ap.add_argument("--match-books", action="store_true",
+                    help="Draw the leaked set from as many train books as the "
+                         "config has test books, so the two sets differ in "
+                         "whether the book was seen and not in how many books "
+                         "they span. Without it the comparison is confounded.")
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
 
     splits = json.loads(Path(args.splits).read_text(encoding="utf-8"))["configs"]
     mixture = json.loads(Path(args.mixture).read_text(encoding="utf-8"))
 
-    plan = choose(args.manifest, splits, mixture,
-                  args.max_per_config, args.seed, args.min_leaked)
+    plan = choose(args.manifest, splits, mixture, args.max_per_config,
+                  args.seed, args.min_leaked, match_books=args.match_books)
     if args.configs:
         plan = {k: v for k, v in plan.items() if k in args.configs}
 
@@ -324,6 +350,7 @@ def main() -> None:
     (out_dir / "testset_summary.json").write_text(json.dumps({
         "seed": args.seed, "max_per_config": args.max_per_config,
         "min_leaked": args.min_leaked, "data_dir": args.data_dir,
+        "match_books": args.match_books,
         "honest_total": total_h, "leaked_total": total_l,
         "leak_excluded": excluded, "configs": summary,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
