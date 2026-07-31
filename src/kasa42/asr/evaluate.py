@@ -103,7 +103,47 @@ def report(scores: dict[str, dict], title: str = "") -> str:
     return "\n".join(lines)
 
 
-def leak_report(honest: dict, leaked: dict) -> str:
+def utterance_counts(records: list[dict], unit: str = "word") -> list[tuple[int, int]]:
+    """(errors, reference tokens) per utterance — the unit a bootstrap resamples."""
+    out = []
+    for r in records:
+        ref, hyp = normalize(r["reference"]), normalize(r["hypothesis"])
+        rt = ref.split() if unit == "word" else list(ref.replace(" ", ""))
+        ht = hyp.split() if unit == "word" else list(hyp.replace(" ", ""))
+        out.append((_levenshtein(rt, ht), len(rt)))
+    return out
+
+
+def bootstrap_delta(honest: list[tuple[int, int]], leaked: list[tuple[int, int]],
+                    rounds: int = 2000, seed: int = 20260730) -> tuple[float, float, float]:
+    """95% interval on (honest WER - leaked WER), resampling whole utterances.
+
+    Resampling *utterances* rather than words is the whole point. Errors cluster
+    heavily inside an utterance — one badly transcribed clip contributes a run of
+    them — so treating words as independent understates the interval several-fold
+    and would make a difference of a point look decisive when it is not.
+
+    The two sets contain different utterances, so the sides are resampled
+    independently rather than paired.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    he, hw = (np.array(x, dtype=float) for x in zip(*honest))
+    le, lw = (np.array(x, dtype=float) for x in zip(*leaked))
+
+    deltas = np.empty(rounds)
+    for i in range(rounds):
+        hi = rng.integers(0, len(he), len(he))
+        li = rng.integers(0, len(le), len(le))
+        h = he[hi].sum() / max(hw[hi].sum(), 1e-9)
+        l = le[li].sum() / max(lw[li].sum(), 1e-9)
+        deltas[i] = h - l
+    return float(deltas.mean()), float(np.percentile(deltas, 2.5)), \
+        float(np.percentile(deltas, 97.5))
+
+
+def leak_report(honest: dict, leaked: dict, ci: tuple[float, float, float] | None = None) -> str:
     """The money table: identical weights, two evaluation protocols."""
     lines = ["", "Leaked (random split) vs. honest (book-disjoint) — same weights",
              "=" * 64,
@@ -120,8 +160,34 @@ def leak_report(honest: dict, leaked: dict) -> str:
     lines.append("-" * 64)
     hm, lm = honest["__micro__"]["wer"], leaked["__micro__"]["wer"]
     lines.append(f"{'micro-average':24s} {lm:>8.1%} {hm:>8.1%} {(hm - lm) * 100:>+9.1f}pp")
-    if lm > 0:
-        lines.append(f"\nA random split understates WER by {(hm/lm - 1):.0%} on these weights.")
+
+    gap = (hm - lm) * 100
+    if ci is None:
+        # Say nothing about direction without an interval. A gap of a point or
+        # two across 42 languages is exactly the size sampling noise produces,
+        # and the earlier wording ("understates WER by -3%") was incoherent for
+        # a negative gap while reading as a finding.
+        lines.append(f"\nGap {gap:+.1f}pp. No confidence interval computed — "
+                     f"run evaluate.py to get one before quoting a direction.")
+        return "\n".join(lines)
+
+    mean, lo, hi = (x * 100 for x in ci)
+    lines.append(f"\nhonest - leaked: {gap:+.1f}pp   "
+                 f"95% CI [{lo:+.1f}, {hi:+.1f}]pp   (bootstrap over utterances)")
+    if lo <= 0 <= hi:
+        lines.append(
+            "The interval spans zero: on these weights a book-disjoint split is "
+            "NOT measurably harder than a random one over seen books.\n"
+            "That is a negative result, not a missing one. Book-level splitting "
+            "remains the conservative default — this says the model is not "
+            "memorising books at this scale, not that leakage cannot occur.")
+    elif lo > 0:
+        lines.append(f"A random split understates WER by {gap:.1f}pp "
+                     f"({hm/lm - 1:.0%} relative) on these weights.")
+    else:
+        lines.append(f"The book-disjoint split scores {-gap:.1f}pp *better*, "
+                     f"which is the opposite of the leakage hypothesis and worth "
+                     f"explaining before it is reported.")
     return "\n".join(lines)
 
 
@@ -237,10 +303,21 @@ def main() -> None:
     # micro-averages taken over different language sets would not be a
     # like-for-like number.
     shared = {k for k in leaked if not k.startswith("__")}
-    honest_matched = score_by_language([r for r in honest_recs if r["config"] in shared])
+    matched_recs = [r for r in honest_recs if r["config"] in shared]
+    honest_matched = score_by_language(matched_recs)
     save(honest_matched, f"{args.out_dir}/honest_matched.json")
 
-    text = leak_report(honest_matched, leaked)
+    # Keep the per-utterance records. Re-scoring, bootstrapping or inspecting
+    # individual failures should never require another hour of inference.
+    for name, recs in (("honest", honest_recs), ("leaked", leaked_recs)):
+        with open(f"{args.out_dir}/records_{name}.jsonl", "w", encoding="utf-8") as fh:
+            for r in recs:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    print("bootstrapping the leaked-vs-honest gap ...")
+    ci = bootstrap_delta(utterance_counts(matched_recs), utterance_counts(leaked_recs))
+
+    text = leak_report(honest_matched, leaked, ci=ci)
     print("\n" + text)
     dropped = len({k for k in honest if not k.startswith("__")} - shared)
     if dropped:
