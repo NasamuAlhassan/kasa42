@@ -130,13 +130,17 @@ def choose(manifest: str, splits: dict, mixture: dict, max_per_config: int,
             if sid not in trained.get(config, ()) and is_trainable(text):
                 leaked[config].append((sid, int(shard or 0)))
 
-    rng = random.Random(seed)
     out: dict[str, dict] = {}
     for config in sorted(set(t.column("config").to_pylist())):
         h = _one_per_id(sorted(honest.get(config, [])))
         l = _one_per_id(sorted(leaked.get(config, [])))
-        rng.shuffle(h)
-        rng.shuffle(l)
+        # A stream per (seed, config, side). One shared generator couples them:
+        # shuffling a shorter leaked list consumes a different number of draws,
+        # so every later config's *honest* sample shifts too. --match-books only
+        # touches the leaked draw, yet moved honest Ninkare by 7.3pp — an
+        # artefact that looked exactly like a real effect.
+        random.Random(f"{seed}:{config}:honest").shuffle(h)
+        random.Random(f"{seed}:{config}:leaked").shuffle(l)
         enough = len(l) >= min_leaked
         out[config] = {
             "honest": h[:max_per_config],
