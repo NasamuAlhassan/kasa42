@@ -83,20 +83,27 @@ Three layers, and they are not the same:
 
 | Layer | Holder | Terms |
 |---|---|---|
-| **Underlying audio** | Faith Comes By Hearing (FCBH, `KUSTBLN2DA`), Global Recordings Network (GRN, Kusal LLL series) | © the respective ministries. **Not redistributable commercially.** |
-| **Scripture text** | GILLBT Kusaal Bible | © GILLBT |
-| **Alignment, segmentation, packaging** | Prince Nasamu Alhassan | Research and educational use |
+| **Old Testament audio** (~79% of hours) | © Davar Partners International (2023) — [davaraudiobibles.org](https://davaraudiobibles.org) | Non-commercial |
+| **New Testament audio** (~21%) | Kusaal NT Drama `KUSTBLN2DA`, © Wycliffe / Hosanna (1996, 2005), distributed by Faith Comes By Hearing — [faithcomesbyhearing.com](https://faithcomesbyhearing.com) | Non-commercial |
+| **Additional audio** | Global Recordings Network, Kusal "Look, Listen & Live" and "Words of Life" — [globalrecordings.net](https://globalrecordings.net) | Non-commercial |
+| **Scripture text** | GILLBT Kusaal Bible — [gillbt.org](https://gillbt.org) | Non-commercial |
+| **Alignment, segmentation, packaging** | Prince Nasamu Alhassan | CC BY 4.0, research use |
+
+Only the last row is the dataset author's to license. The recordings come from
+scripture ministries who publish audio in minority languages as a free public
+service; their work is what makes this dataset possible.
 
 **Use this for research, education, and non-commercial language technology.**
-For any commercial use you must clear rights with FCBH, GRN and GILLBT
-directly — this dataset grants nothing on their behalf, and nothing here implies
-endorsement by any of them.
+Commercial use requires clearing rights with **Davar, FCBH, GRN and GILLBT
+directly**. This dataset grants nothing on their behalf, and nothing here
+implies endorsement by any of them.
 
 Models trained on it inherit these constraints.
 
 ## Provenance
 
-Chapter-level scripture recordings from FCBH and GRN, force-aligned at verse
+Chapter-level scripture recordings from Davar (OT), FCBH/Hosanna (NT Drama)
+and GRN, force-aligned at verse
 level by CTC segmentation against GILLBT Kusaal Bible text, sliced to individual
 verses and resampled to 16 kHz mono. Built 2026-05-23. Verse text lineage:
 [`PrinceAlhassanNasamu/kusaal-english-parallel-corpus`](https://huggingface.co/datasets/PrinceAlhassanNasamu/kusaal-english-parallel-corpus).
