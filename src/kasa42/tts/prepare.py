@@ -40,6 +40,10 @@ def main() -> None:
     ap.add_argument("--max-hours", type=float, default=20.0,
                     help="VITS converges long before the full 80 h; more is slower, not better.")
     ap.add_argument("--check-clips", type=int, default=6)
+    ap.add_argument("--eval-clips", type=int, default=32,
+                    help="Held out for the trainer's eval split.")
+    ap.add_argument("--no-export", action="store_true",
+                    help="Skip writing audio — gate check and manifest only.")
     ap.add_argument("--only-books", nargs="*", default=[],
                     help="Restrict to these books. A single version can still "
                          "hold more than one narrator; speaker_check.py clusters "
@@ -146,6 +150,40 @@ def main() -> None:
                     "hours": round(total_sec / 3600, 2), "items": meta},
                    ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"wrote {out_dir/'metadata.json'}")
+
+    if args.no_export:
+        print("--no-export: audio not written, so this cannot train anything yet")
+        return
+
+    # Write the corpus as `audiofolder`: a directory of WAVs plus a metadata.csv
+    # naming each one. That is what `datasets.load_dataset` recognises without
+    # a loading script, which is what the VITS trainer calls.
+    #
+    # Previously only the six gate-check clips were written and `wavs/` was left
+    # empty, so the trainer would start against a corpus with no audio in it.
+    import csv
+
+    from kasa42.asr.dataset import decode_audio
+
+    eval_n = min(args.eval_clips, max(len(kept) // 20, 1))
+    splits = {"eval": kept[:eval_n], "train": kept[eval_n:]}
+    for split, items in splits.items():
+        d = out_dir / split
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / "metadata.csv", "w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(["file_name", "text"])
+            for i, k in enumerate(items):
+                name = f"{k['book']}_{i:06d}.wav"
+                sf.write(d / name, decode_audio(k["audio"]), 16000)
+                w.writerow([name, k["text"]])
+                if i and i % 2000 == 0:
+                    print(f"  {split}: {i:,}/{len(items):,}")
+        hrs = sum(k["duration"] for k in items) / 3600
+        print(f"wrote {len(items):,} clips ({hrs:.2f} h) -> {d}")
+
+    print(f"\n{out_dir} is now loadable:")
+    print(f"  datasets.load_dataset('audiofolder', data_dir='{out_dir}')")
 
 
 if __name__ == "__main__":

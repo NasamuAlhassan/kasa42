@@ -39,9 +39,19 @@ def ensure_trainer(root: Path) -> Path:
     # The alignment search is a Cython extension; training fails without it.
     mas = repo / "monotonic_align"
     if mas.exists() and not list(mas.glob("**/*.so")) and not list(mas.glob("**/*.pyd")):
+        try:
+            import Cython  # noqa: F401
+        except ImportError:
+            # Not in the training extras, and the failure surfaces as a bare
+            # ModuleNotFoundError from a setup.py three directories away.
+            print("installing Cython (needed to build monotonic_align)")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                            "Cython"], check=True)
         print("building monotonic_align")
         subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"],
                        cwd=mas, check=True)
+    built = list(mas.glob("**/*.so")) + list(mas.glob("**/*.pyd"))
+    print(f"monotonic_align: {len(built)} extension(s) built")
     return repo
 
 
