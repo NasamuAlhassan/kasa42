@@ -79,7 +79,7 @@ Old Testament is ~79% of hours, New Testament ~21%.
 
 ## Licensing — read this before using the audio
 
-Three layers, and they are not the same:
+Five layers, held by four different parties, and they are not the same:
 
 | Layer | Holder | Terms |
 |---|---|---|
