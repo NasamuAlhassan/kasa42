@@ -1,0 +1,972 @@
+<title>KASA-42 — 42 Languages in 48 Hours</title>
+<style>
+  :root {
+    --ground:#F5F7F3; --surface:#FFFFFF; --raised:#EDF1E9;
+    --ink:#131711; --ink-soft:#5D655A; --rule:#DBE1D6;
+    --accent:#0E6B4A; --accent-soft:#E2EDE7; --gold:#8C6208; --warn:#A33B18;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Roboto Mono", monospace;
+    --measure: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0E110C; --surface:#161A13; --raised:#1C2118;
+      --ink:#E8EDE3; --ink-soft:#98A292; --rule:#2B3127;
+      --accent:#54C293; --accent-soft:#17271F; --gold:#D9AB44; --warn:#E58256;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E110C; --surface:#161A13; --raised:#1C2118;
+    --ink:#E8EDE3; --ink-soft:#98A292; --rule:#2B3127;
+    --accent:#54C293; --accent-soft:#17271F; --gold:#D9AB44; --warn:#E58256;
+  }
+  :root[data-theme="light"] {
+    --ground:#F5F7F3; --surface:#FFFFFF; --raised:#EDF1E9;
+    --ink:#131711; --ink-soft:#5D655A; --rule:#DBE1D6;
+    --accent:#0E6B4A; --accent-soft:#E2EDE7; --gold:#8C6208; --warn:#A33B18;
+  }
+
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--serif); font-size:17px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:var(--measure); margin:0 auto; padding:0 24px; }
+  .bleed { max-width:1080px; margin:0 auto; padding:0 24px; }
+
+  h1,h2,h3,h4 { font-family:var(--sans); text-wrap:balance; margin:0; }
+  h1 { font-size:clamp(2.4rem,6vw,3.9rem); font-weight:800; letter-spacing:-.035em; line-height:1.02; }
+  h2 { font-size:clamp(1.5rem,3.2vw,2.05rem); font-weight:750; letter-spacing:-.022em; line-height:1.15; }
+  h3 { font-size:1.13rem; font-weight:700; letter-spacing:-.012em; }
+  h4 { font-size:.95rem; font-weight:700; letter-spacing:-.005em; }
+  p { margin:0; }
+  a { color:var(--accent); text-underline-offset:3px; }
+
+  .eyebrow {
+    font-family:var(--mono); font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.16em; color:var(--gold); font-weight:600;
+  }
+  .lede { font-size:1.2rem; line-height:1.55; color:var(--ink-soft); }
+  .stack { display:flex; flex-direction:column; gap:1.15rem; }
+  .stack-sm { display:flex; flex-direction:column; gap:.6rem; }
+
+  /* ---- hero ---- */
+  header.hero { border-bottom:1px solid var(--rule); background:var(--surface); }
+  .hero-in { display:flex; flex-direction:column; gap:1.6rem; padding:clamp(3.5rem,9vw,6rem) 24px clamp(2.6rem,6vw,4rem); }
+  .glyphs {
+    font-family:var(--serif); font-size:clamp(2.6rem,9vw,4.6rem); line-height:1;
+    color:var(--accent); letter-spacing:.14em; font-weight:400;
+  }
+  .glyphs span:nth-child(even) { color:var(--gold); }
+  .hero-meta {
+    display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; font-family:var(--mono);
+    font-size:.76rem; color:var(--ink-soft); padding-top:.4rem;
+  }
+
+  /* ---- key figures ---- */
+  .figs { display:grid; grid-template-columns:repeat(auto-fit,minmax(154px,1fr)); gap:1px;
+          background:var(--rule); border:1px solid var(--rule); }
+  .fig { background:var(--surface); padding:1.15rem 1.1rem; display:flex; flex-direction:column; gap:.3rem; }
+  .fig .n { font-family:var(--mono); font-size:1.72rem; font-weight:600; letter-spacing:-.02em;
+            font-variant-numeric:tabular-nums; line-height:1; }
+  .fig .l { font-family:var(--sans); font-size:.73rem; color:var(--ink-soft); line-height:1.35; }
+
+  /* ---- sections ---- */
+  section { padding:clamp(2.8rem,6vw,4.4rem) 0; border-top:1px solid var(--rule); }
+  .sec-head { display:flex; gap:1rem; align-items:baseline; margin-bottom:1.5rem; }
+  .sec-num { font-family:var(--mono); font-size:.8rem; color:var(--accent); font-weight:600;
+             flex:0 0 auto; padding-top:.25rem; }
+
+  /* ---- tables ---- */
+  .tbl-scroll { overflow-x:auto; border:1px solid var(--rule); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; font-family:var(--mono); font-size:.79rem;
+          font-variant-numeric:tabular-nums; }
+  th,td { padding:.44rem .8rem; text-align:right; white-space:nowrap; border-bottom:1px solid var(--rule); }
+  th { font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; color:var(--ink-soft);
+       font-weight:600; position:sticky; top:0; background:var(--raised); }
+  td:first-child, th:first-child { text-align:left; }
+  tbody tr:last-child td { border-bottom:none; }
+  tr.total td { font-weight:700; background:var(--accent-soft); border-top:2px solid var(--accent); }
+  .up { color:var(--warn); } .down { color:var(--accent); }
+
+  /* ---- code ---- */
+  pre { margin:0; overflow-x:auto; background:var(--surface); border:1px solid var(--rule);
+        padding:1rem 1.1rem; font-family:var(--mono); font-size:.78rem; line-height:1.6; }
+  code { font-family:var(--mono); font-size:.87em; background:var(--raised);
+         padding:.09em .34em; border-radius:2px; }
+  pre code { background:none; padding:0; font-size:1em; }
+  .cap { font-family:var(--sans); font-size:.76rem; color:var(--ink-soft); margin-top:.5rem; }
+
+  /* ---- bug catalogue ---- */
+  .bug { border-top:1px solid var(--rule); padding:1.5rem 0; display:flex; flex-direction:column; gap:.7rem; }
+  .bug:last-child { border-bottom:1px solid var(--rule); }
+  .bug-top { display:flex; flex-wrap:wrap; gap:.5rem 1rem; align-items:baseline; }
+  .bug-top h3 { flex:1 1 16rem; }
+  .cost { font-family:var(--mono); font-size:.7rem; text-transform:uppercase; letter-spacing:.09em;
+          color:var(--warn); font-weight:600; border:1px solid currentColor; padding:.14rem .45rem; }
+  .bug dl { margin:0; display:grid; grid-template-columns:auto 1fr; gap:.3rem 1rem; font-size:.95rem; }
+  .bug dt { font-family:var(--mono); font-size:.7rem; text-transform:uppercase; letter-spacing:.08em;
+            color:var(--ink-soft); padding-top:.35rem; }
+  .bug dd { margin:0; }
+
+  /* ---- callouts ---- */
+  .note { border-left:3px solid var(--accent); background:var(--surface); padding:1rem 1.2rem;
+          display:flex; flex-direction:column; gap:.5rem; }
+  .note.warn { border-left-color:var(--warn); }
+  .note h4 { font-size:.82rem; text-transform:uppercase; letter-spacing:.09em; color:var(--ink-soft); }
+
+  ul,ol { margin:0; padding-left:1.3rem; display:flex; flex-direction:column; gap:.5rem; }
+  li::marker { color:var(--accent); }
+  hr.rule { border:none; border-top:1px solid var(--rule); margin:0; }
+  footer { border-top:1px solid var(--rule); background:var(--surface);
+           padding:2.6rem 0 3.4rem; color:var(--ink-soft); font-size:.88rem; }
+  strong { font-weight:700; }
+  @media (prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
+</style>
+
+<header class="hero">
+  <div class="wrap hero-in">
+    <div class="glyphs" aria-label="Ghanaian orthographic characters">
+      <span>ŋ</span><span>ɔ</span><span>ɛ</span><span>ʋ</span><span>ɣ</span>
+    </div>
+    <div class="stack">
+      <p class="eyebrow">Ghana NLP · H200 window · 30 Jul – 1 Aug 2026</p>
+      <h1>42 languages, one speech model, 48 hours</h1>
+      <p class="lede">
+        KASA-42 transcribes 42 Ghanaian language subsets and works out which one
+        is being spoken without being told. This is the full record — the design
+        decisions and why, every result including the ones that went the wrong
+        way, three things the corpus turned out to be hiding, and the eleven bugs
+        that had to be found first.
+      </p>
+    </div>
+    <div class="hero-meta">
+      <span>Prince Nasamu Alhassan</span>
+      <span>w2v-BERT 2.0 + CTC + LID</span>
+      <span>52 commits · 6,740 lines</span>
+      <span>CC BY-NC 4.0</span>
+    </div>
+  </div>
+</header>
+
+<div class="bleed" style="padding-top:2.2rem;padding-bottom:.6rem;">
+  <div class="figs">
+    <div class="fig"><span class="n">30.2%</span><span class="l">WER, book-disjoint, 8,400 utterances</span></div>
+    <div class="fig"><span class="n">10.5%</span><span class="l">CER, same test set</span></div>
+    <div class="fig"><span class="n">96.8%</span><span class="l">Language ID over 42 classes<br>(chance: 2.4%)</span></div>
+    <div class="fig"><span class="n">700 h</span><span class="l">Training mixture from 2,334.9 h available</span></div>
+    <div class="fig"><span class="n">0.47×</span><span class="l">Real time on CPU, int8 ONNX</span></div>
+  </div>
+</div>
+
+<main class="wrap">
+
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>What the task actually was</h2></div>
+  <div class="stack">
+    <p>
+      Ghana NLP granted a 48-hour window on a shared NVIDIA H200 and pointed at
+      <code>ghananlpcommunity/ghana-speech</code> — 42 language subsets, 2,334.9
+      hours, 1.41 million segments, pre-staged on the box at
+      <code>/data/ghana-speech</code>. The brief was open: build something.
+    </p>
+    <p>
+      The starting point was <strong>DONDO</strong>
+      (<code>KhayaAI/w2v-bert-…</code>, Apache-2.0), which covers 11 Northern
+      Ghanaian languages at around 10.3% WER. Three things were added to it:
+    </p>
+    <ul>
+      <li><strong>11 → 42 languages</strong> in a single checkpoint.</li>
+      <li><strong>Language identification.</strong> DONDO conditions on a one-hot
+        language prefix, so the caller has to already know what is being spoken —
+        circular for most real uses. A jointly trained head removes that.</li>
+      <li><strong>A book-disjoint benchmark</strong>, and an actual test of
+        whether book-disjointness matters.</li>
+    </ul>
+    <p>
+      The third item is the one that turned out to be most interesting, and not
+      in the direction expected.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>Why these choices</h2></div>
+  <div class="stack">
+    <h3>w2v-BERT 2.0 over Whisper</h3>
+    <p>
+      Segments in this corpus have a median duration of 4.9 seconds. Whisper pads
+      every input to 30 seconds, so roughly 80% of its compute would have gone
+      into zeros. w2v-BERT is a plain encoder over variable-length audio, is
+      10–30× faster to fine-tune at comparable WER, and beats Whisper outright on
+      genuinely low-resource languages — which describes 30 of the 42 here.
+    </p>
+
+    <h3>DONDO over raw <code>facebook/w2v-bert-2.0</code></h3>
+    <p>
+      DONDO has already seen this language family and this recording domain.
+      With a 48-hour budget, starting from a checkpoint that knows Kusaal is
+      worth more than architectural purity. The cost is a caveat that has to be
+      carried: DONDO's own training books are unpublished, so a small
+      unquantified overlap with any test set is possible.
+    </p>
+
+    <h3>Extending the vocabulary, not replacing it</h3>
+    <p>
+      DONDO ships 49 tokens; 42 languages need more. Rather than renumbering,
+      every shared character keeps its original index, so
+      <code>extend_ctc_head</code> can copy DONDO's trained output rows straight
+      across. 49 rows transferred, 47 new characters initialised fresh, 96 total.
+    </p>
+    <div class="note">
+      <h4>The consequence people get wrong</h4>
+      <p>
+        The CTC blank is <code>[PAD]</code> at index <strong>33</strong>, not 0,
+        because that is where DONDO put it. Every decode path takes
+        <code>blank_id</code> explicitly. Any code that assumes blank is 0
+        silently produces garbage rather than failing.
+      </p>
+    </div>
+
+    <h3>Folding homoglyphs</h3>
+    <p>
+      DONDO's published vocabulary contains both U+0511 <code>ԑ</code> and
+      U+025B <code>ɛ</code>, and both U+2184 <code>ↄ</code> and U+0254
+      <code>ɔ</code> — the same letter competing for probability mass across two
+      of only 49 output units. Real corpora contain both because typists reach
+      for whatever the keyboard offers. Folding costs nothing and removes the
+      split.
+    </p>
+
+    <h3>Splitting by book</h3>
+    <p>
+      <code>source_file</code> parses as <code>BOOK.CHAPTER.VERSION</code>, so
+      the corpus is Bible audio. A random segment split puts adjacent verses —
+      same narrator, same session, minutes apart — on both sides of the boundary.
+      Splitting by book avoids that.
+    </p>
+    <p>
+      There is a trap immediately next to it. Splitting on
+      <code>(version, book)</code> looks more careful and is <em>worse</em>: it
+      puts Genesis-v1 in train and Genesis-v2 in test — different audio,
+      byte-identical transcript. Six languages contain the same book under
+      multiple versions, so this is not hypothetical.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>The pipeline</h2></div>
+  <div class="stack">
+    <p>
+      Six stages, each consuming the previous one's output. Everything before
+      training reads only metadata columns via parquet projection, so all 42
+      languages could be audited without touching the audio.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Stage</th><th>Produces</th><th>Scale</th></tr></thead>
+        <tbody>
+          <tr><td>build_manifest</td><td>manifest.parquet</td><td>1,411,467 rows · 44 MB · ~1 min</td></tr>
+          <tr><td>splits</td><td>splits.json</td><td>1,801 books, 26–66 per language</td></tr>
+          <tr><td>vocab</td><td>vocab.json</td><td>96 tokens · 97.3% of text trainable</td></tr>
+          <tr><td>mixture</td><td>mixture.json</td><td>700 h from 2,030 h · 393,160 segments</td></tr>
+          <tr><td>testset</td><td>two evaluation sets</td><td>8,400 + 7,540 utterances</td></tr>
+          <tr><td>train</td><td>final.pt</td><td>24,000 steps · ~6 h</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">
+      The manifest was network-bound and hours long until the data turned out to
+      be already on the box; <code>--local-root</code> made it disk-bound and
+      about a minute.
+    </p>
+
+    <h3>The mixture</h3>
+    <p>
+      Raw, the corpus is ~16× imbalanced — Asante Twi has 200 hours, Mampruli
+      about 25. Training on that produces a model excellent at Twi and useless on
+      the tail, which defeats covering 42 languages at all. Temperature sampling
+      at α=0.5 with a 40 h per-language cap takes the largest language's share
+      from 8.5% to 4.9%, and 2,030 available hours down to 700 — which is the
+      single reason the run fits in hours rather than days.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>Results</h2></div>
+  <div class="stack">
+    <p>
+      Book-disjoint test set, 200 utterances per language, 8,400 total. No book
+      appears in both training and test.
+    </p>
+    <div class="tbl-scroll" style="max-height:520px;">
+      <table>
+        <thead><tr><th>Language</th><th>WER</th><th>CER</th><th>LID</th></tr></thead>
+        <tbody>
+          <tr><td>Gonja</td><td>13.0%</td><td>6.0%</td><td>96.5%</td></tr>
+          <tr><td>Birifor Southern</td><td>15.2%</td><td>4.0%</td><td>100.0%</td></tr>
+          <tr><td>Sisaala Tumulung</td><td>15.5%</td><td>4.4%</td><td>99.0%</td></tr>
+          <tr><td>Bimoba</td><td>15.6%</td><td>5.0%</td><td>99.5%</td></tr>
+          <tr><td>Paasaal</td><td>17.0%</td><td>3.6%</td><td>99.5%</td></tr>
+          <tr><td>Mampruli</td><td>17.5%</td><td>5.5%</td><td>100.0%</td></tr>
+          <tr><td>Dagaare</td><td>21.9%</td><td>9.2%</td><td>95.0%</td></tr>
+          <tr><td>Selee</td><td>22.2%</td><td>3.8%</td><td>99.5%</td></tr>
+          <tr><td>Kasem</td><td>22.8%</td><td>11.1%</td><td>97.0%</td></tr>
+          <tr><td>Nawuri</td><td>22.8%</td><td>10.1%</td><td>98.0%</td></tr>
+          <tr><td>Tampulma</td><td>23.4%</td><td>5.6%</td><td>98.5%</td></tr>
+          <tr><td>Lelemi</td><td>24.1%</td><td>8.8%</td><td>95.5%</td></tr>
+          <tr><td>Dagbani</td><td>24.5%</td><td>9.1%</td><td>97.0%</td></tr>
+          <tr><td>Konni</td><td>24.7%</td><td>5.9%</td><td>98.5%</td></tr>
+          <tr><td>Fante</td><td>25.1%</td><td>5.9%</td><td>93.0%</td></tr>
+          <tr><td>Buli</td><td>26.2%</td><td>12.0%</td><td>95.5%</td></tr>
+          <tr><td>Gikyode</td><td>26.2%</td><td>5.6%</td><td>99.0%</td></tr>
+          <tr><td>Dangme</td><td>27.7%</td><td>7.8%</td><td>99.5%</td></tr>
+          <tr><td>Sekpele</td><td>28.0%</td><td>5.7%</td><td>99.5%</td></tr>
+          <tr><td>Anyin</td><td>28.9%</td><td>8.2%</td><td>99.5%</td></tr>
+          <tr><td>Vagla</td><td>29.2%</td><td>10.8%</td><td>95.0%</td></tr>
+          <tr><td>Deg</td><td>29.4%</td><td>11.7%</td><td>95.5%</td></tr>
+          <tr><td>Asante Twi</td><td>29.5%</td><td>8.6%</td><td>93.5%</td></tr>
+          <tr><td>Kusaal</td><td>30.2%</td><td>16.3%</td><td>95.5%</td></tr>
+          <tr><td>Fulfulde Maasina</td><td>31.2%</td><td>9.7%</td><td>98.5%</td></tr>
+          <tr><td>Chumburung</td><td>31.8%</td><td>10.9%</td><td>100.0%</td></tr>
+          <tr><td>Konkomba</td><td>31.9%</td><td>16.6%</td><td>97.5%</td></tr>
+          <tr><td>Ewe</td><td>33.1%</td><td>10.5%</td><td>96.5%</td></tr>
+          <tr><td>Tuwuli</td><td>37.6%</td><td>14.9%</td><td>93.0%</td></tr>
+          <tr><td>Avatime</td><td>40.0%</td><td>14.2%</td><td>93.0%</td></tr>
+          <tr><td>Bissa</td><td>40.9%</td><td>9.5%</td><td>99.0%</td></tr>
+          <tr><td>Tem</td><td>41.5%</td><td>8.7%</td><td>98.0%</td></tr>
+          <tr><td>Akuapem Twi</td><td>41.6%</td><td>16.5%</td><td>92.0%</td></tr>
+          <tr><td>Bassar Ntcham</td><td>42.6%</td><td>18.6%</td><td>97.5%</td></tr>
+          <tr><td>Sehwi</td><td>45.8%</td><td>22.2%</td><td>93.0%</td></tr>
+          <tr><td>Ntrubo</td><td>46.9%</td><td>13.3%</td><td>97.0%</td></tr>
+          <tr><td>Hausa</td><td>47.5%</td><td>31.7%</td><td>98.0%</td></tr>
+          <tr><td>Siwu</td><td>47.7%</td><td>14.3%</td><td>94.5%</td></tr>
+          <tr><td>Nzema</td><td>55.4%</td><td>18.9%</td><td>94.0%</td></tr>
+          <tr><td>Nkonya</td><td>58.0%</td><td>14.2%</td><td>91.5%</td></tr>
+          <tr><td>Ninkare</td><td>62.5%</td><td>42.1%</td><td>96.0%</td></tr>
+          <tr><td>Kabiye</td><td>69.8%</td><td>25.9%</td><td>95.5%</td></tr>
+          <tr class="total"><td>micro-average</td><td>30.2%</td><td>10.5%</td><td>96.8%</td></tr>
+          <tr class="total"><td>macro-average</td><td>32.5%</td><td>11.8%</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note warn">
+      <h4>Read these to the nearest few points</h4>
+      <p>
+        Three independent draws of the same test design gave micro WER of 30.3%,
+        30.0% and 30.2% — but <strong>individual languages moved by up to
+        7.3 points</strong> (Ninkare 57.2% → 64.5%). At 200 utterances per
+        language the micro-average is stable to a few tenths and the per-language
+        figures are not. Quoting them to one decimal would be misleading.
+      </p>
+    </div>
+
+    <h3>Language identification is the strongest result</h3>
+    <p>
+      96.8% mean accuracy over 42 classes, where chance is 2.4%. Four languages
+      hit 100%, the floor is 91.5%. This is the capability DONDO explicitly does
+      not have, and it is what makes a single microphone button possible instead
+      of a language picker.
+    </p>
+
+    <h3>Against other systems</h3>
+    <p>
+      Each row recomputes <em>both</em> sides over only the languages that system
+      covers. Comparing an average over 34 covered languages against an average
+      over all 42 would flatter whichever system declined the hardest ones.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>System</th><th>Langs</th><th>Their WER</th><th>Ours</th><th>Their CER</th><th>Ours</th></tr></thead>
+        <tbody>
+          <tr><td>Whisper large-v3</td><td>42</td><td class="up">102.3%</td><td>30.2%</td><td>57.3%</td><td>10.5%</td></tr>
+          <tr><td>MMS-1B-all</td><td>34</td><td class="down">25.7%</td><td>29.2%</td><td>12.1%</td><td class="down">9.7%</td></tr>
+          <tr><td>DONDO (unconditioned)</td><td>8</td><td>75.9%</td><td>27.6%</td><td>40.8%</td><td>14.1%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>MMS-1B-all beats us on WER by 3.5 points.</strong> We beat it on
+      CER by 2.4, cover eight languages it has no adapter for, do language
+      identification it does not do, at roughly 60% of its parameter count.
+    </p>
+    <p>
+      The WER/CER split is the informative part. MMS's ratio is 2.1×, ours 3.0× —
+      we get <em>more characters right and more words wrong</em>. That is a word
+      segmentation weakness, not an acoustic one, and the same signature appears
+      per-language (Bissa: 40.9% WER against 9.5% CER). Space prediction is the
+      obvious next thing to work on.
+    </p>
+    <div class="note warn">
+      <h4>The DONDO row is not a fair comparison</h4>
+      <p>
+        DONDO conditions on a one-hot language prefix. Our harness supplies none
+        and runs it as a plain CTC model, so 75.9% is a lower bound on its
+        ability against a published ~10.3%. The README originally claimed the
+        prefix <em>was</em> supplied; it never was. The number is reported for
+        transparency about what was run, not as evidence about DONDO.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>The leakage experiment, and its negative result</h2></div>
+  <div class="stack">
+    <p>
+      The project's stated thesis was that a random split flatters WER, and that
+      the gap between a leaked and an honest split is the point. It was tested
+      properly. <strong>The gap is not there.</strong>
+    </p>
+    <p>
+      Identical weights were scored on two sets: segments from held-out books,
+      and segments from <em>seen</em> books that the model was never trained on.
+      Both contain only unseen utterances; the sole difference is whether the
+      book was seen.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Construction</th><th>honest − leaked</th><th>95% CI</th></tr></thead>
+        <tbody>
+          <tr><td>Unmatched</td><td>−1.1pp</td><td>[−1.9, −0.3]</td></tr>
+          <tr><td>Book-diversity matched</td><td>−0.7pp</td><td>[−1.4, +0.1]</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      The matched interval spans zero. On these weights, book-level overlap
+      confers no measurable advantage.
+    </p>
+
+    <h3>The first attempt was confounded, and measuring it showed how</h3>
+    <p>
+      The first construction gave −1.1pp with an interval excluding zero — the
+      book-disjoint split appeared <em>reliably easier</em>, which is backwards.
+      Inspecting the two sets explained it:
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Set</th><th>Books / config</th><th>Words / utt</th><th>Duration</th></tr></thead>
+        <tbody>
+          <tr><td>honest</td><td>4.2</td><td>20.25</td><td>7.85 s</td></tr>
+          <tr><td>leaked</td><td>27.2</td><td>19.31</td><td>7.62 s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Six and a half times the content diversity, and 4.9% shorter references.
+      Both make the leaked side harder for reasons that have nothing to do with
+      leakage — in exactly the direction observed. The comparison varied two
+      things at once. <code>--match-books</code> restricts the leaked draw to as
+      many train books as the config has test books, leaving book-seen-ness as
+      the only difference.
+    </p>
+
+    <div class="note">
+      <h4>What can honestly be claimed</h4>
+      <p>
+        That the model is <strong>not memorising books at this scale</strong> —
+        one pass over 700 hours, at 30% WER — not that leakage cannot occur. A
+        longer-trained or higher-capacity model may behave differently. And
+        <em>chapter-adjacent</em> leakage, the strongest form, was not tested:
+        a naive split puts consecutive verses from one recording session on both
+        sides, and our leaked set samples across whole books, which dilutes that.
+      </p>
+      <p>
+        Book-disjoint splitting remains the conservative default. This result
+        says it cost nothing.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>Does it know the language, or one studio?</h2></div>
+  <div class="stack">
+    <p>
+      Every number so far comes from one corpus. A model trained and tested on a
+      single recording project cannot distinguish having learned a language from
+      having learned a studio. So it was scored on an independent Kusaal corpus —
+      81.7 hours from Faith Comes By Hearing, Davar and Global Recordings
+      Network, force-aligned into 9.5-second clips against GILLBT text.
+    </p>
+    <p>
+      Restricted to the <strong>11 books KASA-42 held out of training</strong>.
+      That restriction is not fussiness: the corpus ships its own test split, and
+      all four of its held-out books — plus all four validation books — are in
+      KASA-42's training books. Scripture corpora share a translation, so scoring
+      there would have measured sentences the model had already seen, with only
+      the audio new.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Test set</th><th>Clips</th><th>WER</th><th>CER</th><th>LID</th></tr></thead>
+        <tbody>
+          <tr><td>ghana-speech (version 3752)</td><td>200</td><td>30.2%</td><td>16.3%</td><td>95.5%</td></tr>
+          <tr><td>Independent corpus (FCBH / Davar / GRN)</td><td>2,895</td><td class="up">37.9%</td><td class="up">21.9%</td><td class="down">99.8%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Transcription degrades about <strong>25% relative</strong> on unfamiliar
+      recordings of the same language and domain. That is the honest cost of
+      changing recording source, and it is the number to quote when asked what
+      this model would do on audio from anywhere else.
+    </p>
+    <p>
+      <strong>Language identification goes the other way — up to 99.8%</strong>
+      across 2,895 clips from a different ministry, a different alignment
+      pipeline and different narrators. The LID head keys on the language and not
+      the channel. That is the claim the language-ID contribution rests on, and
+      it was previously untested.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">07</span><h2>Three things the corpus was hiding</h2></div>
+  <div class="stack">
+    <h3><code>id</code> is not a unique key</h3>
+    <p>
+      In <strong>13 of 42 configs</strong>, by factors up to 1.52× — Sisaala has
+      47,096 rows against 31,074 distinct ids. Anything selecting segments by id,
+      which is the obvious design, silently over-samples those languages.
+    </p>
+    <p>
+      What makes it hard to catch is that <strong>the accounting reconciles
+      either way</strong>. Hours are summed over rows, so the printed totals are
+      correct under both readings and nothing looks wrong. Sisaala's 22.9-hour
+      allocation would have trained on roughly 34.8 hours, making a tail language
+      joint-largest in the mixture above Ewe and Hausa — precisely the imbalance
+      the mixture exists to remove. It surfaced only because a test set had an
+      exact cap to check against: <code>--max-per-config 200</code> returned 380.
+    </p>
+
+    <h3>One version code, two narrators</h3>
+    <p>
+      Kusaal is 100% version <code>3752</code>, and the Phase 0 audit concluded
+      from that it was a single recording project and therefore one narrator.
+      ECAPA-TDNN speaker embeddings over one clip per book, clustered against a
+      threshold calibrated from same-book pairs, split it cleanly:
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Cluster</th><th>Books</th><th>Hours</th><th>Content</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>28</td><td>39.7</td><td>100% Old Testament</td></tr>
+          <tr><td>2, 0, 4</td><td>12</td><td>~6</td><td>100% New Testament</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      A perfect OT/NT split with zero crossover — the two testaments were
+      recorded as separate campaigns, as they usually are. Fine-tuning
+      single-speaker TTS across that boundary averages two voices into a muddy
+      one, and the metadata gives no warning at all.
+    </p>
+
+    <h3>Hebrew in Ewe and Hausa</h3>
+    <p>
+      21 characters — <code>א ב ג ד ה ו ז ח ט י כ ל מ נ ס ע פ צ ק ר ש ת</code> —
+      appearing 67 times across 1.41 million segments. Not an encoding fault:
+      Psalm 119's acrostic stanza headings, one per Hebrew letter, which is
+      exactly the count you would expect.
+    </p>
+
+    <h3>And three figures that were simply wrong</h3>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Quantity</th><th>Phase 0 estimate</th><th>Actual</th></tr></thead>
+        <tbody>
+          <tr><td>Corpus hours</td><td>2,247</td><td>2,334.9</td></tr>
+          <tr><td>Kusaal hours</td><td>81.6</td><td>72.5</td></tr>
+          <tr><td>Books per language</td><td>9–52</td><td>26–66</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Hours had been inferred from audio bytes at 32,000 B/s and validated
+      against the dataset card: Asante Twi, 23.06 GB / 32000 = 200.2 h against a
+      stated 200.02. Flawless — and misleading, because Asante Twi is the
+      <em>largest</em> config, where WAV container overhead disappears into the
+      rounding. On Kusaal the same method ran 13% high.
+    </p>
+    <div class="note">
+      <h4>The general lesson</h4>
+      <p>
+        A byte-derived estimate validated on your biggest partition is validated
+        where the error is smallest. Check the smallest one too.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">08</span><h2>The bugs</h2></div>
+  <div class="stack" style="margin-bottom:1.4rem;">
+    <p>
+      Eleven of consequence. They are listed because most of them would have
+      produced numbers that looked entirely reasonable and were wrong — which is
+      the failure mode that matters in a project whose contribution is
+      measurement.
+    </p>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>Boolean flags that silently did nothing</h3><span class="cost">Invisible</span></div>
+    <dl>
+      <dt>Cause</dt><dd><code>from __future__ import annotations</code> makes
+        <code>f.type</code> the <em>string</em> <code>"bool"</code>, so
+        <code>f.type is bool</code> never matched. Every boolean became a
+        value-taking option.</dd>
+      <dt>Effect</dt><dd><code>--gradient-checkpointing</code> demanded an
+        argument it should not have, and <code>--transfer-head False</code> parsed
+        as <code>bool("False")</code> — which is <code>True</code>.</dd>
+      <dt>Found</dt><dd>By reading <code>--help</code> while verifying something
+        else. It had been latent since the file was written.</dd>
+      <dt>Fix</dt><dd>Test the default, not the annotation.</dd>
+    </dl>
+    <pre><code>if isinstance(f.default, bool):
+    if f.default:
+        # Defaults on, so the useful flag is the one that turns it off.
+        # A store_true here would flip the default to False and quietly
+        # disable the DONDO head transfer.
+        ap.add_argument(f"--no-{name}", dest=f.name,
+                        action="store_false", default=True)
+    else:
+        ap.add_argument(flag, action="store_true", default=False)</code></pre>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>Duplicate ids skewing the mixture and the WER</h3><span class="cost">Would have shipped</span></div>
+    <dl>
+      <dt>Cause</dt><dd><code>id</code> repeats in 13 configs. Both the mixture
+        pool and the loader selected by id, so every copy came along.</dd>
+      <dt>Effect</dt><dd>Affected languages trained on up to 1.52× their
+        allocation, and their utterances were double-weighted in per-language
+        WER — in the one table the project exists to publish.</dd>
+      <dt>Fix</dt><dd>Key on id at both ends, and have both pick the
+        <em>same</em> copy — the shortest, since manifest row order is thread
+        completion order and not stable across rebuilds.</dd>
+    </dl>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>A 33-point gap printed as “+0.3pp”</h3><span class="cost">The headline</span></div>
+    <dl>
+      <dt>Cause</dt><dd>WERs are fractions; the inflation column formatted the
+        gap with <code>.1f</code> and labelled it <code>pp</code>.</dd>
+      <dt>Effect</dt><dd>The leaked-vs-honest table — the entire point of the
+        project — would have understated its own result by 100×.</dd>
+      <dt>Found</dt><dd>Testing the report function on synthetic scores before
+        any real ones existed.</dd>
+    </dl>
+    <pre><code>-  lines.append(f"{k:24s} {l:>8.1%} {h:>8.1%} {h - l:>+10.1f}pp")
++  lines.append(f"{k:24s} {l:>8.1%} {h:>8.1%} {(h - l) * 100:>+9.1f}pp")</code></pre>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>Two RNG streams that were secretly one</h3><span class="cost">Looked like a finding</span></div>
+    <dl>
+      <dt>Cause</dt><dd>A single generator shuffled the honest then the leaked
+        selection for each config in turn. A shorter leaked list consumed a
+        different number of draws, so every <em>later</em> config's honest sample
+        started from a different state.</dd>
+      <dt>Effect</dt><dd><code>--match-books</code>, which must not touch the
+        honest set, moved honest Ninkare by 7.3 points. It looked exactly like a
+        real effect.</dd>
+      <dt>Fix</dt><dd>A stream per <code>(seed, config, side)</code>.</dd>
+      <dt>Silver lining</dt><dd>The accident measured the sampling variance at
+        n=200 directly — which is why the per-language table is now quoted
+        coarsely.</dd>
+    </dl>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>Evaluation OOM at utterance 8,000 of 8,400</h3><span class="cost">A full pass</span></div>
+    <dl>
+      <dt>Cause</dt><dd>Sorting by duration ascending, then taking fixed groups
+        of 16. The final batches were therefore all 29-second clips: 469 seconds
+        of audio in one forward pass, against the 120 the rest of the stack
+        budgets for.</dd>
+      <dt>Effect</dt><dd>It failed at the <em>end</em> of the job, having done
+        all the work — the most expensive possible place to fail — and only once
+        a neighbouring tenant grew.</dd>
+      <dt>Fix</dt><dd>Budget padded duration, not count, so the last batch costs
+        what the first one costs.</dd>
+    </dl>
+    <pre><code>for i in order:
+    d = float(durations[i] or 0.0)
+    if cur and (max(longest, d) * (len(cur) + 1) > batch_duration
+                or len(cur) >= batch_size):
+        batches.append(cur); cur, longest = [i], d
+    else:
+        cur.append(i); longest = max(longest, d)</code></pre>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>A 309 MB parquet row group</h3><span class="cost">Public and broken</span></div>
+    <dl>
+      <dt>Cause</dt><dd>PyArrow defaults to about a million rows per row group.
+        For audio at ~300 KB a clip, each 400 MB shard became one 309 MB
+        group.</dd>
+      <dt>Effect</dt><dd>A reader must decompress an entire row group to return
+        any row in it, so showing five rows meant scanning the whole shard. The
+        Hub's viewer refused the dataset outright.</dd>
+      <dt>Fix</dt><dd>Size row groups from the audio actually present, and write
+        a page index.</dd>
+    </dl>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>An unfair number about someone else's model</h3><span class="cost">Reputational</span></div>
+    <dl>
+      <dt>Cause</dt><dd><code>run_dondo</code> filtered to DONDO's languages and
+        then ran it as a plain CTC model. It supplied no language prefix, despite
+        the README claiming it did.</dd>
+      <dt>Effect</dt><dd>DONDO scored 75.9% against a published ~10.3%. Publishing
+        that as a comparison would have been the one genuinely unfair claim in an
+        otherwise careful project.</dd>
+      <dt>Fix</dt><dd>Withdrawn as a comparison in three places — README, model
+        card, and a warning printed by the script that produces it.</dd>
+    </dl>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>datasets 5.x demanding torchcodec</h3><span class="cost">~1 h</span></div>
+    <dl>
+      <dt>Cause</dt><dd>The <code>Audio</code> feature began decoding through
+        torchcodec on every row fetch.</dd>
+      <dt>Effect</dt><dd>A DataLoader worker died on the first batch, before a
+        single step.</dd>
+      <dt>Fix</dt><dd>Not installing torchcodec — nothing here wanted a decoded
+        array. <code>decode=False</code> leaves the column as
+        <code>{bytes, path}</code>, which the existing soundfile path already
+        accepted.</dd>
+    </dl>
+    <pre><code>def undecoded_audio(ds):
+    import datasets
+    if "audio" not in ds.column_names:
+        return ds
+    return ds.cast_column("audio", datasets.Audio(decode=False))</code></pre>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>A neighbour who grew from 42 GB to 100 GB</h3><span class="cost">~3 h of steps</span></div>
+    <dl>
+      <dt>Cause</dt><dd>The H200 was shared. Another tenant's footprint moved by
+        60 GB inside one evening, invisible except as <code>No running processes
+        found</code> beside 100 GB of usage.</dd>
+      <dt>Effect</dt><dd>Training died at step 300 while using only 38.9 GB
+        itself.</dd>
+      <dt>Fix</dt><dd>Gradient checkpointing to ~15 GB, and an OOM-skip: drop the
+        batch, empty the cache, continue. Eight consecutive means the room is
+        genuinely gone, so it saves a resumable checkpoint and exits saying what
+        to resume with.</dd>
+    </dl>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>10,000 files per directory</h3><span class="cost">A silent, unusable dataset</span></div>
+    <dl>
+      <dt>Cause</dt><dd>A Hub repo is git-backed. A 24,597-clip <code>train/</code>
+        directory was rejected mid-push.</dd>
+      <dt>Effect</dt><dd>Worse than a clean failure: 11,597 rows landed, the
+        subdirectories were read as <em>class labels</em>, and the dataset
+        appeared publicly as audio classification with a null <code>label</code>
+        column and no transcripts at all.</dd>
+      <dt>Fix</dt><dd>Parquet shards with the <code>huggingface</code> schema
+        metadata written directly, so packing needs no torchcodec either.</dd>
+    </dl>
+  </div>
+
+  <div class="bug">
+    <div class="bug-top"><h3>A requirements.txt that replaced torch</h3><span class="cost">The last hour</span></div>
+    <dl>
+      <dt>Cause</dt><dd><code>pip install -r</code> on a third-party trainer's
+        requirements, into the shared conda environment everything else depended
+        on.</dd>
+      <dt>Effect</dt><dd>torch <code>2.5.1+cu124</code> → <code>2.13.0+cu130</code>,
+        and CUDA stopped working because the driver predated cu130. It surfaced
+        as <code>transformers</code> being unable to import
+        <code>Wav2Vec2BertModel</code>.</dd>
+      <dt>Fix</dt><dd>Force-reinstall the matching pair. The real fix was
+        <code>--no-deps</code>, or a separate virtualenv, twenty minutes
+        earlier.</dd>
+    </dl>
+  </div>
+
+  <div class="stack" style="margin-top:1.6rem;">
+    <div class="note">
+      <h4>The pattern worth extracting</h4>
+      <p>
+        Four of these are the same shape: <strong>a library default that is
+        correct for text and wrong for audio.</strong> A fixed batch count. A
+        million-row parquet group. An <code>Audio</code> feature that decodes
+        eagerly. A directory of files. None of them error at small scale; all of
+        them fail at full size, and two of them failed at the very end of a long
+        job.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">09</span><h2>Tooling built along the way</h2></div>
+  <div class="stack">
+    <p>
+      36 modules, 6,740 lines. The pipeline is the obvious half; the rest exists
+      because a 48-hour window on shared hardware punishes anything you cannot
+      see or cannot recover from.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Module</th><th>Exists because</th></tr></thead>
+        <tbody>
+          <tr><td>doctor</td><td>Every environment failure was cheap to detect and expensive to hit late</td></tr>
+          <tr><td>monitor</td><td>Piped stdout buffers for ~2,350 steps; progress is inferred from checkpoint mtimes</td></tr>
+          <tr><td>watchdog</td><td>A run that dies at 02:00 otherwise costs every hour until someone wakes</td></tr>
+          <tr><td>pipeline</td><td>Training finishing at 01:00 is worth little if evaluation waits for a human</td></tr>
+          <tr><td>verify_onnx</td><td>The tracer bakes shape comparisons in as constants — an export can be right at one length and wrong at every other</td></tr>
+          <tr><td>compare</td><td>Baseline averages over different language sets are not a comparison</td></tr>
+          <tr><td>external</td><td>Scoring an outside corpus is the only way to tell a language from a studio</td></tr>
+          <tr><td>pack</td><td>Loose WAVs are the wrong shape for a Hub audio dataset in three separate ways</td></tr>
+          <tr><td>speaker_check</td><td>Ears on laptop speakers cannot separate a different person from a different session</td></tr>
+          <tr><td>survey</td><td>42 VITS fine-tunes is ~190 GPU-hours; asking which languages <em>could</em> support a voice is answerable</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Watching a run that will not speak</h3>
+    <p>
+      <code>| tee</code> hands Python a pipe, so stdout block-buffers at 8 KB —
+      roughly 2,350 steps, the better part of an hour, before a line appears.
+      Restarting with <code>python -u</code> would have cost every step so far.
+      Checkpoint timestamps give a measured rate instead, and unlike elapsed-time
+      arithmetic they exclude dataset loading:
+    </p>
+    <pre><code>if len(pts) >= 2:
+    (s0, t0, _), (s1, t1, _) = pts[0], pts[-1]
+    if t1 > t0:
+        rate = (s1 - s0) / (t1 - t0)
+        return rate, s1 + rate * (now - t1)</code></pre>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">10</span><h2>What this is not</h2></div>
+  <div class="stack">
+    <ul>
+      <li><strong>Not the first Kusaal speech model.</strong>
+        <code>facebook/mms-tts-kus</code> exists, MMS-1B-all covers Kusaal ASR,
+        and DONDO covers Kusaal at 13.3% WER.</li>
+      <li><strong>Not the most accurate model here.</strong> MMS-1B-all is 3.5
+        points better on WER over the 34 languages it covers.</li>
+      <li><strong>Not tested on conversational speech.</strong> Everything is
+        read scripture — formal, archaic, proper-noun dense, studio-recorded. The
+        cross-corpus result measures robustness to <em>recording conditions</em>,
+        not to spontaneous speech, which remains untested.</li>
+      <li><strong>Not a fair measurement of DONDO.</strong> See above.</li>
+      <li><strong>Not commercially usable.</strong> CC BY-NC 4.0, inherited from
+        the training data. DONDO is Apache-2.0, so this is a licensing
+        <em>downgrade</em> for anyone who could have deployed DONDO.</li>
+    </ul>
+    <p>
+      What is left after all that: broader coverage in one checkpoint, language
+      identification DONDO does not have, results on a split that does not leak,
+      and the leakage question actually tested rather than asserted.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">11</span><h2>Reproducing it</h2></div>
+  <div class="stack">
+    <p>
+      Everything below runs from the public repository and public data. On a
+      machine with the corpus staged locally, Phase 0 takes minutes.
+    </p>
+    <pre><code>git clone https://github.com/NasamuAlhassan/kasa42 &amp;&amp; cd kasa42
+pip install -e '.[train,serve]'
+
+python -m kasa42.doctor --data-dir /data/ghana-speech
+
+python -m kasa42.data.build_manifest --local-root /data/ghana-speech --workers 16
+python -m kasa42.data.splits
+python -m kasa42.data.vocab
+python -m kasa42.data.mixture --alpha 0.5 --cap-hours 40
+python -m kasa42.asr.testset --data-dir /data/ghana-speech --match-books
+
+python -u -m kasa42.asr.train --max-steps 24000 --batch-duration 160 \
+  --gradient-checkpointing --data-dir /data/ghana-speech
+
+python -u -m kasa42.pipeline --repo &lt;you&gt;/kasa42-asr</code></pre>
+    <p class="cap">
+      <code>doctor</code> first is not ceremony: it checks free VRAM across all
+      tenants, whether bf16 is hardware or emulated, that <code>HF_HOME</code>
+      points somewhere with room, and that all four training artefacts exist —
+      and exits non-zero if not.
+    </p>
+    <div class="note warn">
+      <h4>If you take one thing from the code</h4>
+      <p>
+        Keep <code>vocab.json</code>. It maps CTC indices to characters, and the
+        blank is <code>[PAD]</code>=33 rather than 0. Without it the published
+        weights cannot be decoded by anyone, including the person who trained
+        them.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section style="border-bottom:1px solid var(--rule);">
+  <div class="sec-head"><span class="sec-num">12</span><h2>What I would do differently</h2></div>
+  <div class="stack">
+    <ul>
+      <li><strong>Check the smallest partition, not the largest.</strong> The
+        byte-derived duration estimate validated perfectly on the biggest config
+        and was 13% wrong on a small one.</li>
+      <li><strong>Never assume a key is a key.</strong> One
+        <code>len(set(ids)) == len(ids)</code> at manifest time would have caught
+        the duplicate-id problem on day one instead of day two.</li>
+      <li><strong>Install third-party requirements into a separate
+        environment.</strong> One <code>pip install -r</code> cost the last hour
+        of the window and a trained model with it.</li>
+      <li><strong>Budget audio work in seconds, not items.</strong> Every
+        count-based default — batches, row groups, files per directory — broke at
+        full size.</li>
+      <li><strong>Upload the small files first.</strong> A 2.42 GB checkpoint
+        went to the Hub; the 7 KB vocabulary it needs nearly did not.</li>
+      <li><strong>Test the report before the result.</strong> The
+        <code>+0.3pp</code> formatting bug was in the one table the project was
+        built to produce.</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap stack-sm">
+    <p style="font-family:var(--sans);font-weight:700;color:var(--ink);">KASA-42</p>
+    <p>
+      Prince Nasamu Alhassan · Independent NLP researcher, University of Ghana,
+      Legon · GhanaNLP
+    </p>
+    <p>
+      Compute provided by <strong>AI Skills and Compute Africa (AISCA)</strong>.
+      Corpus by the GhanaNLP community. Base checkpoint
+      <a href="https://arxiv.org/abs/2607.21540">DONDO</a> by Paul Azunre.
+      Kusaal audio © Davar Partners International, Wycliffe/Hosanna via Faith
+      Comes By Hearing, and Global Recordings Network; text © GILLBT.
+    </p>
+    <p style="font-family:var(--mono);font-size:.76rem;">
+      Models and data are CC BY-NC 4.0. Code Apache-2.0.
+    </p>
+  </div>
+</footer>
