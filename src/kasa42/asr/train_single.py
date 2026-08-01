@@ -42,6 +42,41 @@ from kasa42.data.text import normalize
 DONDO = "KhayaAI/w2v-bert-gjn_maw_gur_dag_dga_kus_lxn_wlx_xon_xsm_en"
 
 
+def build_vocab(rows, path: Path, min_count: int = 20) -> dict:
+    """Derive a CTC vocabulary from the corpus, extending DONDO's.
+
+    `data/vocab.py` builds this from the 42-language manifest, which a
+    single-corpus run has no reason to construct — and on a fresh machine that
+    manifest does not exist at all, which is enough to stop a rerun dead.
+
+    DONDO's tokens keep their original indices so `extend_ctc_head` can carry
+    its trained rows across, blank stays `[PAD]`, and characters below the
+    frequency floor are dropped and named: each costs an output unit that will
+    never be predicted reliably.
+    """
+    from collections import Counter
+
+    from kasa42.data.vocab import load_dondo_vocab
+
+    vocab = dict(load_dondo_vocab())
+    counts = Counter(c for _, t, _ in rows for c in normalize(t) if c != " ")
+    rare = sorted(c for c, n in counts.items() if n < min_count and c not in vocab)
+    added = sorted(c for c, n in counts.items() if n >= min_count and c not in vocab)
+    for c in added:
+        vocab[c] = len(vocab)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"vocab": vocab}, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    print(f"built vocab: {len(vocab)} tokens "
+          f"({len(vocab) - len(added)} from DONDO, {len(added)} added)")
+    if rare:
+        print(f"  dropped {len(rare)} char(s) under {min_count} occurrences: "
+              f"{''.join(rare)}")
+    print(f"  wrote {path} — keep it, the weights cannot be decoded without it")
+    return vocab
+
+
 def load_split(data_dir: str, prefix: str, text_col: str):
     """Rows for one split, as (audio_bytes, text, duration) — audio left encoded."""
     import pyarrow.parquet as pq
@@ -141,7 +176,10 @@ def evaluate(model, rows, fe, tok, device, amp, budget, cap):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--data-dir", required=True)
-    ap.add_argument("--vocab", default="results/vocab.json")
+    ap.add_argument("--vocab", default="results/vocab.json",
+                    help="Built from the corpus if the file does not exist.")
+    ap.add_argument("--vocab-min-count", type=int, default=20,
+                    help="Frequency floor for characters new to DONDO.")
     ap.add_argument("--out-dir", default="checkpoints/kusaal-w2vbert")
     ap.add_argument("--init", default=DONDO,
                     help="Encoder to start from, or a kasa42 .pt checkpoint.")
@@ -164,9 +202,15 @@ def main() -> None:
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    tok = CharTokenizer.from_json(args.vocab)
     train_rows = load_split(args.data_dir, args.train_prefix, args.text_col)
     eval_rows = load_split(args.data_dir, args.eval_prefix, args.text_col)[: args.eval_clips]
+
+    # Build the vocabulary if it is not already there, so a fresh machine needs
+    # nothing but this repo and the corpus.
+    if not Path(args.vocab).exists():
+        print(f"{args.vocab} not found — deriving one from the corpus")
+        build_vocab(train_rows, Path(args.vocab), args.vocab_min_count)
+    tok = CharTokenizer.from_json(args.vocab)
     hrs = sum(r[2] for r in train_rows) / 3600
     print(f"train {len(train_rows):,} clips ({hrs:.1f} h)  "
           f"eval {len(eval_rows):,}  vocab {len(tok)}  blank={tok.blank}")
